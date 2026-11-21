@@ -7,17 +7,25 @@
 #   make sanitize   the tests and fingerprint scenarios under AddressSanitizer and UBSan (build/asan)
 CXX ?= g++
 OUT := build
+.DEFAULT_GOAL := all
 WARN := -Wall -Wextra -Werror
 # The MPC's cores. -ffp-contract=fast lets the compiler fuse multiply-adds; nothing here relies on IEEE errno,
 # traps or exceptions.
 OPT := -O3 -mcpu=cortex-a55 -ffp-contract=fast -fno-math-errno -fno-trapping-math
-CXXFLAGS := -std=c++17 $(OPT) $(WARN) -fno-exceptions -fno-rtti -fvisibility=hidden -fPIC -Ithird_party/clap/include -Isrc
+CXXFLAGS := -std=c++17 $(OPT) $(WARN) -fno-exceptions -fno-rtti -fvisibility=hidden -fPIC -Ithird_party/clap/include -Isrc -I$(OUT)
 # Only clap_entry is exported; libstdc++ and libgcc are linked in so the MPC needs nothing beyond libc and libm. -s
 # leaves out the symbol table (the code is the same; the exported clap_entry stays).
 LDFLAGS := -shared -s -static-libgcc -static-libstdc++ -Wl,--gc-sections -Wl,-z,now -Wl,-O1 -Wl,--version-script=src/exports.map
 
 SOURCES := src/foundry.cpp
-HEADERS := $(wildcard src/*.h)
+HEADERS := $(wildcard src/*.h src/ui/*.h) $(OUT)/screen-art.h
+
+$(OUT)/bake-screen: tools/bake-screen.cpp
+	@mkdir -p $(OUT)
+	$(CXX) -std=c++17 -O2 $(WARN) $< -lpng -o $@
+
+$(OUT)/screen-art.h: assets/acid-cast.png $(OUT)/bake-screen
+	$(OUT)/bake-screen $< > $@.tmp && mv $@.tmp $@
 
 .PHONY: all test bench clean fingerprint-update sanitize
 all: $(OUT)/Foundry.clap
@@ -26,7 +34,7 @@ $(OUT)/Foundry.clap: $(SOURCES) $(HEADERS) src/exports.map Makefile
 	@mkdir -p $(OUT)
 	$(CXX) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) -o $@
 
-$(OUT)/host: tests/host.cpp tests/wav.h Makefile
+$(OUT)/host: tests/host.cpp tests/wav.h src/melodee_screen.h Makefile
 	@mkdir -p $(OUT)
 	$(CXX) -std=c++17 -O2 $(WARN) -Ithird_party/clap/include tests/host.cpp -ldl -o $@
 
@@ -44,7 +52,7 @@ fingerprint-update: $(OUT)/Foundry.clap $(OUT)/fingerprint
 
 $(OUT)/bench: tests/bench.cpp $(SOURCES) $(HEADERS) Makefile
 	@mkdir -p $(OUT)
-	$(CXX) -std=c++17 $(OPT) $(WARN) -g -Ithird_party/clap/include -Isrc tests/bench.cpp -o $@
+	$(CXX) -std=c++17 $(OPT) $(WARN) -g -Ithird_party/clap/include -Isrc -I$(OUT) tests/bench.cpp -o $@
 
 bench: $(OUT)/bench
 
@@ -52,7 +60,7 @@ bench: $(OUT)/bench
 # leak or undefined behaviour stops it. The fingerprints' hashes hold only for the release flags, so a mismatch
 # there (exit 1) is expected; a sanitizer's report aborts instead (abort_on_error for both, so UBSan's is not an exit 1).
 SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g1
-sanitize:
+sanitize: $(OUT)/screen-art.h
 	@mkdir -p $(OUT)/asan
 	$(CXX) $(subst -O3,-O1,$(CXXFLAGS)) $(SAN) $(SOURCES) -shared -Wl,--version-script=src/exports.map -o $(OUT)/asan/Foundry.clap
 	$(CXX) -std=c++17 -O1 $(SAN) -Ithird_party/clap/include tests/host.cpp -ldl -o $(OUT)/asan/host

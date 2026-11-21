@@ -52,6 +52,18 @@ voice keeps its parameters.
 at its own pitch (pad bank B, notes 52-67, is -8 to +7 semitones; bank C goes on up); with GM, notes from 84 up, 96
 being its pitch. Set it to BD for an 808 bass line (the **808 Bass Keys** preset).
 
+## Acid Cast screen
+
+In hdslaveOS, Foundry draws the Acid Cast panel on Edit and Stage. The sixteen pads light in playing order.
+A kick pushes the chrome face forward, a snare offsets its blue outline, and the metal voices flare the rays.
+The four lanes below show the last two seconds of strikes by velocity, including linked voices, flams and sub-steps.
+One lane follows the selected pad and the others follow recent voices.
+
+Turn the wheel to select a pad. Push it to audition that voice, including when the transport is stopped.
+K1–K3 start on its Level, Tune and Decay. Minus and Plus cycle through the rest of its controls and then the
+kit controls. From the first bank, Minus wraps to the last kit bank. The next pad opens on its first bank.
+Hold Shift for the control guide. Host automation and pad hits leave the edit focus on the pad you selected.
+
 ## The models
 
 Each model follows what is documented of that machine's circuits, and then was fitted to recordings of the machines

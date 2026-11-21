@@ -28,6 +28,8 @@ struct Engine
 {
     static constexpr int queueSize = 64;
 
+    void* meterContext = nullptr;
+    void (*meterStrike) (void*, int, float) = nullptr;
     Voice voices[voiceCount];
     float m[M::count] {};
     Shared sh;
@@ -207,6 +209,11 @@ struct Engine
         const int v = voiceOf (key, transpose);
         if (v < 0)
             return;
+        playVoice (v, velocity, transpose);
+    }
+
+    void playVoice (int v, float velocity, float transpose)
+    {
         hitVoice (v, velocity, transpose);
         for (int u = 0; u < voiceCount; ++u)
             if (u != v && (int) voices[u].p[V::link] == v + 1)
@@ -324,6 +331,7 @@ struct Engine
                     voices[u].choke();
         sh.lfoBeats = lfoBeats();
         voice.trigger (h.velocity, h.accent, h.transpose, sh);
+        if (meterStrike) meterStrike (meterContext, v, h.velocity);
         tickIdle = false;
         if (v == scVoice)
             duckEnv = 1.0f;

@@ -5,6 +5,7 @@
 #include "engine.h"
 #include "params.h"
 #include "presets.h"
+#include "screen.h"
 
 #include <clap/clap.h>
 
@@ -58,6 +59,18 @@ struct Plugin
     float applied[paramCount] {};
     Engine engine;
     bool active = false;
+    const clap_host_melodee_screen* hostScreen = nullptr;
+    Screen screen;
+    HitMeter meter;
+    Auditions auditions;
+    bool blockChanged = false;
+    std::atomic<bool> paintPending { false };
+
+    void askPaint()
+    {
+        if (hostScreen && !paintPending.exchange (true, std::memory_order_acq_rel))
+            hostScreen->request_paint (host);
+    }
 };
 
 Plugin& of (const clap_plugin* p) { return *static_cast<Plugin*> (p->plugin_data); }
@@ -129,6 +142,7 @@ void handle (Plugin& p, const clap_event_header* e)
             const auto& info = table().rows[index];
             const float value = clampParam (info, (float) v->value);
             p.values[index].store (value, std::memory_order_relaxed);
+            p.blockChanged |= p.applied[index] != value;
             p.applied[index] = value;
             p.engine.set (info.id, value);
             break;
@@ -174,6 +188,7 @@ void paramsFlush (const clap_plugin* plugin, const clap_input_events* in, const 
             {
                 p.values[index].store (clampParam (table().rows[index], (float) v->value), std::memory_order_relaxed);
                 p.mainChanged.store (true, std::memory_order_release);
+                p.askPaint();
             }
         }
     }
@@ -220,6 +235,7 @@ void setAll (Plugin& p, const float* values)
     for (uint32_t i = 0; i < paramCount; ++i)
         p.values[i].store (values[i], std::memory_order_relaxed);
     p.mainChanged.store (true, std::memory_order_release);
+    p.askPaint();
     if (! p.active) // not processing: the engine takes them now; otherwise at the next block
         for (uint32_t i = 0; i < paramCount; ++i)
             p.applied[i] = values[i], p.engine.set (table().rows[i].id, values[i]);
@@ -345,6 +361,17 @@ bool pluginInit (const clap_plugin* plugin)
 {
     auto& p = of (plugin);
     (void) voicesJson();
+    p.hostScreen = static_cast<const clap_host_melodee_screen*> (p.host->get_extension (p.host, CLAP_EXT_MELODEE_SCREEN_HOST));
+    if (p.hostScreen && p.hostScreen->request_paint)
+    {
+        p.engine.meterContext = &p;
+        p.engine.meterStrike = [] (void* ctx, int voice, float strength) {
+            auto& owner = *static_cast<Plugin*> (ctx);
+            owner.meter.strike (voice, strength);
+            owner.blockChanged = true;
+        };
+    }
+    else p.hostScreen = nullptr;
     for (uint32_t i = 0; i < paramCount; ++i)
     {
         const auto& row = table().rows[i];
@@ -372,8 +399,12 @@ bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t 
 
 void pluginDeactivate (const clap_plugin* plugin) { of (plugin).active = false; }
 bool pluginStart (const clap_plugin*) { return true; }
-void pluginStop (const clap_plugin*) {}
-void pluginReset (const clap_plugin* plugin) { of (plugin).engine.reset(); }
+void pluginStop (const clap_plugin* plugin) { of (plugin).auditions.discard(); }
+void pluginReset (const clap_plugin* plugin)
+{
+    of (plugin).auditions.discard();
+    of (plugin).engine.reset();
+}
 
 // Denormals: flush them to zero for the block (the filters and resonators decay into them), as the FPU had it after.
 struct FlushDenormals
@@ -429,6 +460,8 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     else
         p.engine.transport (false, __builtin_nan (""), 0.0, 4.0);
 
+    p.auditions.take ([&] (int v) { p.engine.playVoice (v, 104.0f / 127.0f, 0.0f); });
+
     const auto* in = process->in_events;
     const uint32_t count = in != nullptr ? in->size (in) : 0;
     uint32_t next = 0, done = 0;
@@ -451,11 +484,46 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     }
     for (; next < count; ++next) // events stamped past the block (a host's mistake): applied at its end
         handle (p, in->get (in, next));
+    if (p.blockChanged)
+    {
+        p.blockChanged = false;
+        p.askPaint();
+    }
     return CLAP_PROCESS_CONTINUE;
 }
 
+bool screenPaint (const clap_plugin* plugin, const melodee_screen_canvas* c)
+{
+    if (!c || !c->pixels || c->width != MELODEE_SCREEN_WIDTH || c->height != MELODEE_SCREEN_HEIGHT || c->stride < c->width) return false;
+    auto& p = of (plugin);
+    const bool changed = p.paintPending.exchange (false, std::memory_order_acq_rel);
+    const bool drew = p.screen.paint (*c, p.values, p.meter, changed);
+    // Melodee can suspend a quiet instrument while its two-second history is still travelling.
+    if (p.screen.moving && p.hostScreen) p.hostScreen->request_paint (p.host);
+    return drew;
+}
+
+bool screenInput (const clap_plugin* plugin, const melodee_screen_input* input)
+{
+    if (!input) return false;
+    auto& p = of (plugin);
+    if (input->kind == MELODEE_SCREEN_PUSH)
+    {
+        p.auditions.push (p.screen.voice());
+        if (p.host->request_process) p.host->request_process (p.host);
+    }
+    else if (!p.screen.move (input->kind, input->value)) return false;
+    // The page chooses bindings. Melodee writes all parameter values through the usual CLAP events.
+    p.askPaint();
+    return true;
+}
+
+void screenKnobs (const clap_plugin* plugin, clap_id ids[3]) { of (plugin).screen.knobs (ids); }
+const clap_plugin_melodee_screen screenExtension { screenPaint, screenInput, screenKnobs };
+
 const void* pluginExtension (const clap_plugin*, const char* id)
 {
+    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN) == 0) return &screenExtension;
     if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &paramsExtension;
     if (std::strcmp (id, CLAP_EXT_STATE) == 0) return &stateExtension;
     if (std::strcmp (id, CLAP_EXT_AUDIO_PORTS) == 0) return &audioExtension;

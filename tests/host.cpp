@@ -6,10 +6,15 @@
 // level and length in each model, and writes demo renders as WAV files into the output folder.
 //   host Foundry.clap OUT_FOLDER
 #include "wav.h"
+#include "../src/melodee_screen.h"
 
 #include <clap/clap.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <set>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -33,7 +38,7 @@ int failures = 0, checks = 0;
 const clap_plugin_entry* entry = nullptr;
 const clap_plugin_factory* factory = nullptr;
 
-int rescans = 0, presetsLoaded = 0, presetErrors = 0;
+int rescans = 0, presetsLoaded = 0, presetErrors = 0, paints = 0, processRequests = 0;
 const void* hostExtension (const clap_host*, const char* id)
 {
     static const clap_host_log log { [] (const clap_host*, clap_log_severity s, const char* m) { std::printf ("  [plug-in log %d] %s\n", (int) s, m); } };
@@ -43,6 +48,8 @@ const void* hostExtension (const clap_host*, const char* id)
         [] (const clap_host*, uint32_t, const char*, const char*, int32_t, const char*) { ++presetErrors; },
         [] (const clap_host*, uint32_t, const char*, const char*) { ++presetsLoaded; },
     };
+    static const clap_host_melodee_screen screen { [] (const clap_host*) { ++paints; } };
+    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN_HOST) == 0) return &screen;
     if (std::strcmp (id, CLAP_EXT_LOG) == 0) return &log;
     if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &params;
     if (std::strcmp (id, CLAP_EXT_PRESET_LOAD) == 0) return &presetLoad;
@@ -51,7 +58,7 @@ const void* hostExtension (const clap_host*, const char* id)
 
 clap_host host {
     CLAP_VERSION, nullptr, "Foundry test host", "tests", "", "1",
-    hostExtension, [] (const clap_host*) {}, [] (const clap_host*) {}, [] (const clap_host*) {},
+    hostExtension, [] (const clap_host*) {}, [] (const clap_host*) { ++processRequests; }, [] (const clap_host*) {},
 };
 
 // Input events for one process call, in time order.
@@ -374,6 +381,96 @@ void testDrumMap (const char* path)
     for (int k = 0; k < 16; ++k)
         CHECK_MSG (map.find ("\"name\":\"" + std::string (padNames[k]) + "\",\"note\":" + std::to_string (36 + k) + "}") != std::string::npos, "pad %d", k);
     CHECK (map.back() == '}');
+}
+
+
+void testScreen()
+{
+    Instance i;
+    const auto* ui = static_cast<const clap_plugin_melodee_screen*> (i.plugin->get_extension (i.plugin, CLAP_EXT_MELODEE_SCREEN));
+    CHECK (ui);
+    if (!ui) return;
+    auto input = [&] (uint32_t kind, int value) {
+        melodee_screen_input event { kind, value, false };
+        return ui->input (i.plugin, &event);
+    };
+    auto knobs = [&] {
+        std::array<clap_id, 3> ids;
+        ui->knobs (i.plugin, ids.data());
+        return ids;
+    };
+    std::set<clap_id> available;
+    for (int pad = 0; pad < 16; ++pad)
+    {
+        const int v = std::find (padOfVoice, padOfVoice + 16, pad) - padOfVoice;
+        const std::string tag = tags[v];
+        const auto first = knobs();
+        CHECK (first[0] == i.id (tag+" Level") && first[1] == i.id (tag+" Tune") && first[2] == i.id (tag+" Decay"));
+        int banks = 0;
+        do
+        {
+            for (clap_id id : knobs()) if (id != CLAP_INVALID_ID) available.insert (id);
+            CHECK (input (MELODEE_SCREEN_NUDGE, 1));
+        } while (++banks < 40 && knobs() != first);
+        CHECK (banks < 40);
+        CHECK (input (MELODEE_SCREEN_WHEEL, 1));
+    }
+    for (const auto& p : i.ids) CHECK (available.count (p.second) == 1);
+    CHECK (!input (99, 0));
+    const uint32_t guard = 0x12345678, stride = 325;
+    std::vector<uint32_t> pixels (stride*218 + 2, guard);
+    melodee_screen_canvas c {};
+    c.width = 320; c.height = 218; c.stride = stride; c.pixels = pixels.data()+1;
+    for (auto& k : c.knobs) k.position = -1;
+    auto paint = [&] (bool whole = false) { c.whole = whole; return ui->paint (i.plugin, &c); };
+    CHECK (paint (true));
+    CHECK (!paint());
+    for (unsigned y = 0; y < c.height; ++y)
+    {
+        CHECK (std::find (c.pixels+y*stride, c.pixels+y*stride+320, guard) == c.pixels+y*stride+320);
+        CHECK (std::all_of (c.pixels+y*stride+320, c.pixels+(y+1)*stride, [=] (uint32_t p) { return p == guard; }));
+    }
+    CHECK (pixels.front() == guard && pixels.back() == guard);
+    CHECK (input (MELODEE_SCREEN_WHEEL, 1)); // A02, snare
+    CHECK (paint());
+    const auto idle = pixels;
+    const int wake = processRequests;
+    CHECK (input (MELODEE_SCREEN_PUSH, 0));
+    CHECK (processRequests == wake+1);
+    std::vector<float> l, r;
+    i.play (1024, {}, l, r);
+    CHECK (peakOf (l) > 0.01);
+    int before = paints;
+    CHECK (paint() && pixels != idle && paints > before);
+    before = paints;
+    c.now_ms += 45;
+    CHECK (paint() && paints > before); // self-schedules with no further process call
+    c.now_ms += 2100;
+    CHECK (paint() && pixels == idle);
+    CHECK (!paint());
+    i.setup ({ { "SD Level", -18.0 } });
+    CHECK (paint() && pixels != idle); // automation reaches the displayed card
+    c.knobs[0] = { 22, false };
+    CHECK (paint());
+    c.knobs[0].engaged = true;
+    CHECK (paint());
+    c.shift = true;
+    CHECK (paint());
+
+    // A skipped note never enters history. A stale audition cannot sound when the host next wakes.
+    Instance quiet;
+    auto* q = quiet.plugin;
+    quiet.setup ({ { "BD Prob", 0 } });
+    quiet.play (256, { { 0, 36, 1 } }, l, r);
+    c.now_ms = 0; c.whole = true; c.shift = false;
+    before = paints;
+    CHECK (ui->paint (q, &c) && paints == before);
+    quiet.setup ({ { "BD Prob", 1 } });
+    melodee_screen_input tap { MELODEE_SCREEN_PUSH, 0, false };
+    CHECK (ui->input (q, &tap));
+    std::this_thread::sleep_for (std::chrono::milliseconds (520));
+    quiet.play (256, {}, l, r);
+    CHECK (peakOf (l) == 0);
 }
 
 void testParameters()
@@ -1429,6 +1526,7 @@ int main (int argc, char** argv)
     testDescription();
     testDrumMap (argv[1]);
     testParameters();
+    testScreen();
     testState();
     testPresets();
     testVoices();
