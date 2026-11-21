@@ -568,6 +568,102 @@ void testVoices()
         }
 }
 
+// The power at `hz` over [from, to) (Goertzel), for checking where a voice's partials are.
+double powerAt (const std::vector<float>& x, size_t from, size_t to, double hz, double rate)
+{
+    const double w = 2.0 * M_PI * hz / rate, c = 2.0 * std::cos (w);
+    double s1 = 0.0, s2 = 0.0;
+    for (size_t i = from; i < std::min (to, x.size()); ++i)
+    {
+        const double s0 = x[i] + c * s1 - s2;
+        s2 = s1, s1 = s0;
+    }
+    return s1 * s1 + s2 * s2 - c * s1 * s2;
+}
+// True when `hz` stands above the frequencies a fifth around it: a partial there.
+bool partialAt (const std::vector<float>& x, size_t from, size_t to, double hz, double rate)
+{
+    const double p = powerAt (x, from, to, hz, rate);
+    return p > 4.0 * powerAt (x, from, to, hz * 0.75, rate) && p > 4.0 * powerAt (x, from, to, hz * 1.33, rate);
+}
+
+// What the hardware documents, held to: see the README's sources.
+void testCharacter()
+{
+    auto alone = [] (int voice, int model, std::vector<std::pair<std::string, double>> extra, double vel = 0.75, uint64_t frames = 48000) {
+        Instance i;
+        auto values = solo (voice);
+        values.push_back ({ std::string (tags[voice]) + " Model", (double) model });
+        values.push_back ({ "Clip", 0.0 });
+        values.insert (values.end(), extra.begin(), extra.end());
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (frames, { { 0, 36 + voice, vel } }, l, r);
+        return l;
+    };
+    // 808 kick: the attack about twice the pitch for its first milliseconds (a short first lobe), the sigh (sharper
+    // early than late), and 49.5 Hz once it settles.
+    {
+        const auto k = alone (0, 0, { { "BD Decay", 0.7 } });
+        const long firstZero = [&] { for (size_t i = 10; i < 4800; ++i) if (k[i - 1] > 0.0f && k[i] <= 0.0f) return (long) i; return -1L; }();
+        CHECK_MSG (firstZero > 0 && firstZero < 0.008 * 48000, "first lobe ends at %ld", firstZero); // 49.5 Hz alone: 10 ms
+        const double early = crossingsHz (k, 480, 9600, 48000.0), late = crossingsHz (k, 24000, 48000, 48000.0);
+        CHECK_MSG (early > late * 1.04 && early < late * 1.3, "sigh %g -> %g Hz", early, late);
+        CHECK_MSG (std::fabs (late - 49.5) < 1.0, "settles at %g Hz", late);
+        // Louder sighs more (the leakage follows the swing).
+        const auto soft = alone (0, 0, { { "BD Decay", 0.7 }, { "BD Vel Sens", 1.0 } }, 0.3);
+        CHECK (crossingsHz (soft, 480, 9600, 48000.0) < early);
+    }
+    // 909 kick (B2's defaults): swept from well above its settled pitch.
+    {
+        const auto k = alone (15, 1, { { "B2 Decay", 0.7 }, { "B2 Attack", 0.0 } });
+        const double start = crossingsHz (k, 0, 1440, 48000.0), settled = crossingsHz (k, 24000, 48000, 48000.0);
+        CHECK_MSG (start > 1.4 * settled && std::fabs (settled - 54.45) < 1.5, "%g -> %g Hz", start, settled);
+    }
+    // 808 snare's two networks at 238 and 476 Hz; the rim shot's at 455 and 1667 Hz.
+    {
+        const auto sd = alone (2, 0, { { "SD Snappy", 0.0 }, { "SD Pitch Env", 0.0 } });
+        CHECK (partialAt (sd, 0, 4800, 238.0, 48000.0) && partialAt (sd, 0, 4800, 476.0, 48000.0));
+        const auto rs = alone (1, 0, { { "RS Noise", 0.0 }, { "RS Click", 0.0 }, { "RS Decay", 0.5 } });
+        CHECK (partialAt (rs, 0, 2400, 455.0, 48000.0) && partialAt (rs, 0, 2400, 1667.0, 48000.0));
+    }
+    // 808 toms: the pitch falls as the ring dies (the diodes).
+    {
+        const auto lt = alone (4, 0, { { "LT Color", 0.0 }, { "LT Decay", 0.8 } });
+        const double early = crossingsHz (lt, 0, 2400, 48000.0), late = crossingsHz (lt, 14400, 28800, 48000.0);
+        CHECK_MSG (early > late * 1.05 && std::fabs (late - 90.0) < 3.0, "%g -> %g Hz", early, late);
+    }
+    // 808 hats: their energy above 6 kHz (the 7.1 kHz band, clipped and high passed).
+    {
+        const auto ch = alone (7, 0, {});
+        CHECK (powerAt (ch, 0, 2400, 9000.0, 48000.0) > 10.0 * powerAt (ch, 0, 2400, 1500.0, 48000.0));
+    }
+    // The 808 clap's bursts: at the defaults (Claps 4, Speed 50 %: 9 ms apart) each starts with a jump in level, and
+    // nothing new comes after the fourth.
+    {
+        const auto cp = alone (3, 0, { { "CP Mix", -1.0 } });
+        const size_t gap = 432; // 9 ms
+        for (int b = 1; b < 4; ++b)
+        {
+            const size_t at = gap * (size_t) b;
+            CHECK_MSG (energyOf (cp, at, at + 48) > 20.0 * energyOf (cp, at - 48, at), "burst %d", b + 1);
+        }
+        CHECK (energyOf (cp, 4 * gap, 4 * gap + 48) < energyOf (cp, 4 * gap - 48, 4 * gap) * 1.5);
+    }
+    // The 909 style's metal: words held for a 30 kHz clock (1.6 samples at 48 kHz) and few of them: 6 bits.
+    {
+        Instance i;
+        auto values = solo (8);
+        values.insert (values.end(), { { "OH Model", 1.0 }, { "Clip", 0.0 }, { "OH Level", 0.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (24000, { { 0, 44, 1.0 } }, l, r);
+        // Before the output low pass the words repeat; after it, the 30 kHz images are gone but the spectrum keeps
+        // a notch near the clock: little power at 30 kHz's image (18 kHz) against 9 kHz.
+        CHECK (powerAt (l, 0, 4800, 18000.0, 48000.0) < powerAt (l, 0, 4800, 9000.0, 48000.0));
+    }
+}
+
 // Velocity: softer is quieter; Vel Sens 0 ignores it. Accent: at or above Accent Vel louder.
 void testVelocityAccent()
 {
@@ -1011,6 +1107,7 @@ int main (int argc, char** argv)
     testState();
     testPresets();
     testVoices();
+    testCharacter();
     testVelocityAccent();
     testChoke();
     testPerformance();
