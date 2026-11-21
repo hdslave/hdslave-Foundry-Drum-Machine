@@ -984,8 +984,7 @@ struct Voice
                 const float d = dt[k] * (1.0f + xmod * prev);
                 const float v = rectAt (ph[k], d, duty);
                 ph[k] += d;
-                ph[k] -= ph[k] >= 1.0f ? 1.0f : 0.0f;
-                ph[k] += ph[k] < 0.0f ? 1.0f : 0.0f;
+                ph[k] -= std::floor (ph[k]); // back into [0, 1) from either side, whatever XMod swung the step to
                 prev = v;
                 o[k] = v;
                 sum += gain[k] * v;
@@ -1119,7 +1118,7 @@ struct Voice
             {
                 const float mod = sin2pi (ph[3]) + x[3] * noise.next();
                 ph[3] += dt[3];
-                ph[3] -= ph[3] >= 1.0f ? 1.0f : 0.0f;
+                ph[3] -= std::floor (ph[3]); // whole cycles: the step can pass one at the Keys voice's top
                 fm = 1.0f + x[2] * mod;
             }
             const float a = bellOsc (0, dt[0] * fm, x[4]), b = bellOsc (1, dt[1] * fm, x[4]);

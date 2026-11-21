@@ -210,10 +210,12 @@ at the default, the open hat about 300 ms.
 
 The key is the voice before its Level, so a kick turned down to -inf in the mix still keys (a "ghost kick").
 
-In Melodee: Melodee's master COMPRESSOR can be keyed by a whole track, or by one pad of a sample kit. A plug-in track
-keys it as a whole (every Foundry voice), and Melodee does not yet route a plug-in's second output anywhere. So on
-the MPC today, use Foundry's own Duck or Comp Key for kick pumping, or put a second Foundry on its own track playing
-only the kick and key Melodee's compressor from that track.
+In Melodee: the master COMPRESSOR's Sidechain is keyed by a track (or one pad of a sample kit). In
+[hdslaveOS](https://github.com/hdslave/hdslaveOS) (its `hdslave` branch), a Foundry track as the key is heard through
+its SC Key port: the SC Source voice alone, the kick by default, so the mix ducks under the kick and not under every
+drum (the COMPRESSOR page names the key, for example "6 SC Foundry"). Stock Melodee keys from the whole track, every
+Foundry voice; there, use Foundry's own Duck or Comp Key for kick pumping, or a second Foundry on its own track
+playing only the kick.
 
 ## The 606 and its mods
 
@@ -327,7 +329,7 @@ Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 596,000 | 12.4 % |
+| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 589,000 | 12.3 % |
 | A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 135,000 | 2.8 % |
 | Stopped | about 3,800 | 0.08 % |
 
