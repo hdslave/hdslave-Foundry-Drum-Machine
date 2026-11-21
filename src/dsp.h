@@ -39,7 +39,7 @@ inline float log2Fast (float x)
 }
 
 // tanh, rational, exact at 0 and +-3 where it reaches +-1 and holds: bounded, smooth, cheap.
-inline float tanhFast (float x)
+[[gnu::always_inline]] inline float tanhFast (float x)
 {
     x = clampf (x, -3.0f, 3.0f);
     const float x2 = x * x;
@@ -187,6 +187,14 @@ inline float squareAt (float phase, float dt)
     float half = phase + 0.5f;
     half -= half >= 1.0f ? 1.0f : 0.0f;
     return (phase < 0.5f ? 1.0f : -1.0f) + blep (phase, dt) - blep (half, dt);
+}
+// A rectangle high for `duty` of its cycle: the 808's Schmitt-trigger oscillators run at 47.98 % (Werner), which
+// adds the even harmonics that fill the cowbell's and the metal's spectra between the odd ones.
+inline float rectAt (float phase, float dt, float duty)
+{
+    float fall = phase + 1.0f - duty;
+    fall -= fall >= 1.0f ? 1.0f : 0.0f;
+    return (phase < duty ? 1.0f : -1.0f) + blep (phase, dt) - blep (fall, dt);
 }
 
 // A one-pole high pass at a few hertz: what the rectifying bends add as DC comes out.

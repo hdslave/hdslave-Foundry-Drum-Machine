@@ -392,16 +392,23 @@ struct Engine
             if (! v.active)
                 continue;
             v.render (buf, n, sh, tickEnd);
-            const float* a = v.g0;
-            const float* b = v.g1;
-            for (int i = 0; i < n; ++i)
-            {
-                const float t = ramp[phase + i], s = buf[i];
-                mixL[i] += s * (a[0] + (b[0] - a[0]) * t);
-                mixR[i] += s * (a[1] + (b[1] - a[1]) * t);
-                revIn[i] += s * (a[2] + (b[2] - a[2]) * t);
-                dlyIn[i] += s * (a[3] + (b[3] - a[3]) * t);
-            }
+            // Each gain ramped across the tick, held, or nothing at all (most voices' sends): the same sums, the
+            // work only where there is some.
+            auto add = [&] (float* to, float a, float b) {
+                if (a == b)
+                {
+                    if (a != 0.0f)
+                        for (int i = 0; i < n; ++i)
+                            to[i] += buf[i] * a;
+                    return;
+                }
+                for (int i = 0; i < n; ++i)
+                    to[i] += buf[i] * (a + (b - a) * ramp[phase + i]);
+            };
+            add (mixL, v.g0[0], v.g1[0]);
+            add (mixR, v.g0[1], v.g1[1]);
+            add (revIn, v.g0[2], v.g1[2]);
+            add (dlyIn, v.g0[3], v.g1[3]);
             if (v.index == scVoice)
                 for (int i = 0; i < n; ++i)
                     key[i] = buf[i];

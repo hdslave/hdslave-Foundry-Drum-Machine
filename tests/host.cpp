@@ -623,7 +623,10 @@ void testCharacter()
     // 808 snare's two networks at 175 and 331 Hz (as recorded); the rim shot's at 455 and 1667 Hz.
     {
         const auto sd = alone (2, 0, { { "SD Snappy", 0.0 }, { "SD Pitch Env", 0.0 } });
-        CHECK (partialAt (sd, 0, 4800, 175.0, 48000.0) && partialAt (sd, 0, 4800, 331.0, 48000.0));
+        CHECK (partialAt (sd, 0, 4800, 175.0, 48000.0));
+        CHECK (powerAt (sd, 0, 4800, 331.0, 48000.0) < 0.05 * powerAt (sd, 0, 4800, 175.0, 48000.0)); // the second far under, as recorded
+        const auto bright = alone (2, 0, { { "SD Snappy", 0.0 }, { "SD Pitch Env", 0.0 }, { "SD Tone", 1.0 } });
+        CHECK (partialAt (bright, 0, 4800, 331.0, 48000.0)); // Tone brings it up
         const auto rs = alone (1, 0, { { "RS Noise", 0.0 }, { "RS Click", 0.0 }, { "RS Decay", 0.5 } });
         CHECK (partialAt (rs, 0, 2400, 455.0, 48000.0) && partialAt (rs, 0, 2400, 1667.0, 48000.0));
     }
@@ -716,6 +719,34 @@ void testChoke()
     CHECK (same (std::vector<float> (open.begin(), open.begin() + 12000), std::vector<float> (cut.begin(), cut.begin() + 12000)));
 }
 
+// A voice played in one style then hit in another carries nothing of the first: a 909 closed hat still ringing, the
+// Model turned to 606 and the hat hit again, against the 606 hat hit fresh (the oscillators' phases differ, so the
+// levels are compared, not the samples).
+void testModelSwitch()
+{
+    auto render = [] (bool first909) {
+        Instance i;
+        auto values = solo (7);
+        values.insert (values.end(), { { "CH Model", first909 ? 1.0 : 2.0 }, { "CH Decay", 1.0 }, { "Clip", 0.0 } });
+        i.setup (values);
+        const clap_id model = i.id ("CH Model");
+        std::vector<float> l, r;
+        i.render (12000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            if (first909 && at == 0)
+                e.note (0, CLAP_EVENT_NOTE_ON, 43, 0.8);
+            if (at <= 2000 && 2000 < at + n)
+                e.param ((uint32_t) (2000 - at), model, 2.0);
+            if (at <= 2400 && 2400 < at + n)
+                e.note ((uint32_t) (2400 - at), CLAP_EVENT_NOTE_ON, 43, 0.8);
+            e.sort();
+        });
+        return l;
+    };
+    const auto switched = render (true), fresh = render (false);
+    const double a = energyOf (switched, 2400, 12000), b = energyOf (fresh, 2400, 12000);
+    CHECK_MSG (b > 1e-6 && a < 1.25 * b && a > 0.8 * b, "switched %.4g, fresh %.4g", a, b);
+}
+
 // Prob, Cycle, Flam, Sub-Step, Nudge, Link and Humanize.
 void testPerformance()
 {
@@ -758,13 +789,19 @@ void testPerformance()
         const auto first = onsetsOf (hits ({ { "RS Cycle", 18.0 } }, 16, true, 37, 24000), 1e-4, 2000);
         CHECK (first.size() == 4 && first.back() < 96000);
     }
-    // Flam 20 ms: a grace hit on the note (0.45 of its velocity), the main one 960 frames later, louder.
+    // Flam 20 ms: a grace hit on the note (0.45 of its velocity), the main one 960 frames later, louder (the claves:
+    // linear, so the levels compare).
     {
-        const auto f = hits ({ { "RS Flam", 20.0 } }, 1, true);
+        Instance fl;
+        auto values = solo (12);
+        values.push_back ({ "CL Flam", 20.0 });
+        fl.setup (values);
+        std::vector<float> f, r;
+        fl.play (24000, { { 600, 48, 0.75 } }, f, r, true);
         Instance g;
-        g.setup (solo (1));
-        std::vector<float> grace, r;
-        g.play (f.size(), { { 600, 37, 0.75 * 0.45 } }, grace, r, true);
+        g.setup (solo (12));
+        std::vector<float> grace;
+        g.play (f.size(), { { 600, 48, (double) (0.75f * 0.45f) } }, grace, r, true);
         CHECK (onsetOf (f) == 600);
         std::vector<float> main (f.size());
         for (size_t k = 0; k < f.size(); ++k)
@@ -1122,6 +1159,7 @@ int main (int argc, char** argv)
     testCharacter();
     testVelocityAccent();
     testChoke();
+    testModelSwitch();
     testPerformance();
     testKeysAndMaps();
     testSideChain();

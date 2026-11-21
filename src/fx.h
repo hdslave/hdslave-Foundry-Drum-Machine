@@ -37,7 +37,7 @@ struct Reverb
         {
             len[i] = (int) std::lround (base[i] * scale);
             size[i] = len[i] + (int) (16.0f * scale) + 4;
-            buf[i].assign ((size_t) size[i], 0.0f);
+            buf[i].assign ((size_t) size[i] + 1, 0.0f); // and a guard: a copy of the first sample, after the last
             w[i] = 0;
             modPh[i] = 0.13f * (float) i;
             modInc[i] = (0.31f + 0.07f * (float) i) / rate;
@@ -92,36 +92,47 @@ struct Reverb
                 return;
             asleep = false, quiet = 0;
         }
+        float* line[lines];
+        for (int i = 0; i < lines; ++i)
+            line[i] = buf[i].data();
+        float* const delayed = pre.data();
+        float* const diffuse[2] = { ap[0].data(), ap[1].data() };
         for (; s < n; ++s)
         {
             const float x = in[s];
-            pre[(size_t) preW] = x;
+            delayed[preW] = x;
             int r = preW - preDelay;
             r += r < 0 ? preSize : 0;
-            float v = pre[(size_t) r];
+            float v = delayed[r];
             preW = preW + 1 == preSize ? 0 : preW + 1;
             lowState += (v - lowState) * lowA;
             v -= lowState;
             for (int a = 0; a < 2; ++a)
             {
-                const float held = ap[a][(size_t) apW[a]];
+                const float held = diffuse[a][apW[a]];
                 const float y = held - 0.6f * v;
-                ap[a][(size_t) apW[a]] = v + 0.6f * y;
+                diffuse[a][apW[a]] = v + 0.6f * y;
                 apW[a] = apW[a] + 1 == apSize[a] ? 0 : apW[a] + 1;
                 v = y;
             }
-            float d[lines], sum = 0.0f;
+            // The lines' read points, each swung by its LFO: one loop of their own, which the compiler runs four
+            // lines at a time (the same operations, so the same result).
+            float offset[lines];
             for (int i = 0; i < lines; ++i)
             {
                 modPh[i] += modInc[i];
                 modPh[i] -= modPh[i] >= 1.0f ? 1.0f : 0.0f;
-                const float offset = (float) len[i] + modDepth * 0.5f * (1.0f + sin2pi (modPh[i]));
-                float at = (float) w[i] - offset;
+                offset[i] = (float) len[i] + modDepth * 0.5f * (1.0f + sin2pi (modPh[i]));
+            }
+            float d[lines], sum = 0.0f;
+            for (int i = 0; i < lines; ++i)
+            {
+                float at = (float) w[i] - offset[i];
                 at += at < 0.0f ? (float) size[i] : 0.0f;
                 const int i0 = (int) at;
                 const float frac = at - (float) i0;
-                const int i1 = i0 + 1 == size[i] ? 0 : i0 + 1;
-                const float y = buf[i][(size_t) i0] + frac * (buf[i][(size_t) i1] - buf[i][(size_t) i0]);
+                const float* const b = line[i];
+                const float y = b[i0] + frac * (b[i0 + 1] - b[i0]); // past the end, the guard: the first sample
                 lp[i] += (y - lp[i]) * dampA;
                 d[i] = lp[i];
                 sum += d[i];
@@ -129,7 +140,10 @@ struct Reverb
             sum *= 2.0f / (float) lines;
             for (int i = 0; i < lines; ++i)
             {
-                buf[i][(size_t) w[i]] = (d[i] - sum) * g[i] + ((i & 1) ? -0.35f : 0.35f) * v;
+                const float into = (d[i] - sum) * g[i] + ((i & 1) ? -0.35f : 0.35f) * v;
+                line[i][w[i]] = into;
+                if (w[i] == 0)
+                    line[i][size[i]] = into; // the guard keeps up
                 w[i] = w[i] + 1 == size[i] ? 0 : w[i] + 1;
             }
             const float l = (d[0] - d[2] + d[4] - d[6]) * 0.5f * level, rr = (d[1] - d[3] + d[5] - d[7]) * 0.5f * level;
