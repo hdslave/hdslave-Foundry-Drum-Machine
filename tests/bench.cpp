@@ -99,10 +99,11 @@ int main (int argc, char** argv)
                         add (36 + k, 0.8);
                 else
                 {
-                    if (s % 4 == 0) add (36, 1.0);
-                    if (s % 8 == 4) add (38, 0.9);
-                    add (s % 4 == 2 ? 44 : 43, 0.7);
-                    if (s % 16 == 12) add (39, 0.8);
+                    auto pad = [] (int voice) { return 36 + padOf (voice); }; // the voice's pad
+                    if (s % 4 == 0) add (pad (0), 1.0);           // BD
+                    if (s % 8 == 4) add (pad (2), 0.9);           // SD
+                    add (pad (s % 4 == 2 ? 8 : 7), 0.7);         // OH, CH
+                    if (s % 16 == 12) add (pad (3), 0.8);         // CP
                 }
             }
         for (auto& p : e.params)

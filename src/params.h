@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.5.0"
+#define FOUNDRY_VERSION "0.6.0"
 #endif
 
 namespace foundry
@@ -94,7 +94,7 @@ inline constexpr TypeSpec typeSpecs[] = {
 };
 inline constexpr const TypeSpec& typeSpec (Type t) { return typeSpecs[(int) t]; }
 
-// The sixteen voices, in pad order (Melodee's pads A01-A16 are MIDI notes 36-51).
+// The sixteen voices, in the order of their ids (where each sits on the pads: padVoice below).
 struct VoiceSpec
 {
     const char* tag;  // "BD": the parameters' prefix and the link/side-chain lists' name
@@ -134,6 +134,26 @@ inline constexpr VoiceSpec voiceSpecs[voiceCount] = {
     { "B2", "Bass Drum 2", Type::kick,    m909, {   53.0f,   53.0f,   62.0f }, { { 0.10f, 5.0f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, -3.0f, 0.0f, 0.4f, { 0.5f, 0.6f, 0.45f, 0.35f, 0.0f }, 0, { 35, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
 };
 // clang-format on
+
+// The pads, from A01 (bottom left) along each row and up, and the voice each plays: BD, SD, CP, CH; B2, RS, CY, OH;
+// LT, MT, HT, CB; RD, CL, MA, CG. Pad k is MIDI note 36 + k (Key Map: Pads). The voices keep their ids (their order
+// above); 0.6.0 moved where they sit.
+inline constexpr int8_t padVoice[voiceCount] = { 0, 2, 3, 7, 15, 1, 9, 8, 4, 5, 6, 11, 10, 12, 13, 14 };
+constexpr int padOf (int voice)
+{
+    for (int k = 0; k < voiceCount; ++k)
+        if (padVoice[k] == voice)
+            return k;
+    return -1;
+}
+constexpr bool padsWhole()
+{
+    for (int v = 0; v < voiceCount; ++v)
+        if (padOf (v) < 0)
+            return false;
+    return true;
+}
+static_assert (padsWhole(), "every voice on a pad");
 
 // --- Ids ---------------------------------------------------------------------------------------------------------
 
@@ -295,8 +315,9 @@ inline ParamTable buildTable()
     t.add (M::accentVel, nullptr, "Accent Vel", kit, 1.0f, 127.0f, 100.0f, Kind::integer, Unit::plainInt);
     t.cont (M::chokeTime, nullptr, "Choke Time", kit, 0.0f, 1.0f, 0.45f, Unit::chokeMs);
 
-    for (int v = 0; v < voiceCount; ++v)
+    for (int pad = 0; pad < voiceCount; ++pad) // listed in pad order
     {
+        const int v = padVoice[pad];
         const VoiceSpec& s = voiceSpecs[v];
         const TypeSpec& ts = typeSpecs[(int) s.type];
         const char* pre = s.tag;

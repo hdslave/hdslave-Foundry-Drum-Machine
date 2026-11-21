@@ -124,6 +124,8 @@ struct Voice
     float muteKnob = 0.0f, muteRate = 0.0f, muteCoef = 1.0f; // the Mute Decay its fade was last worked out for
     float bendMix = 1.0f;
     bool inverse = false, ownMute = false;
+    // Corners fixed in hertz, set from their 48 kHz coefficients for the rate in use (at 48 kHz those exactly).
+    float couple = 0.0015f, coefRate = 48000.0f; // the 909 kick's output coupling (about 11.5 Hz)
 
     float slot (int k) const { return p[slotId (k)]; }
 
@@ -251,6 +253,12 @@ struct Voice
         fade = 1.0f;
         model = (uint8_t) p[V::model];
         invRate = sh.invRate, rate = sh.rate;
+        if (rate != coefRate)
+        {
+            coefRate = rate;
+            couple = (float) (0.0015 * 48000.0 / (double) rate);
+            dc.a = (float) std::pow (0.9985, 48000.0 / (double) rate);
+        }
         const float vs = p[V::velSens];
         amp = (1.0f - vs + vs * velocity) * (1.0f + accent * p[V::accent]);
         lfo = lfoValue (sh);
@@ -345,7 +353,7 @@ struct Voice
             case Type::hat:
             case Type::cymbal:
                 for (int k = 0; k < 6; ++k)
-                    dt[k] = metalBase[k] * c;
+                    dt[k] = std::fmin (metalBase[k] * c, 0.3f); // a step under a cycle, even swung by XMod
                 clockInc = 30000.0f * hz * lfoPitch / spec->hz[model] * invRate;
                 break;
             case Type::cowbell: dt[0] = c, dt[1] = c * ratio, dt[2] = c * x[6], dt[3] = c * x[5]; break;
@@ -426,14 +434,14 @@ struct Voice
             {
                 penv *= pcoef;
                 ph[0] += base * (1.0f + bendMul * penv);
-                ph[0] -= ph[0] >= 1.0f ? 1.0f : 0.0f;
+                ph[0] -= std::floor (ph[0]);
                 const float held = e[0] + e[3]; // (1 + t/tau) e^(-t/tau)
                 e[3] = ec[0] * (e[3] + x[5] * e[0]);
                 e[0] *= ec[0];
                 float w = shapedTriangle (ph[0], x[1], x[2]);
                 w *= w < 0.0f ? 1.0f : 0.7f; // the fuller negative half
                 float y = held * w;
-                lp[1] += (y - lp[1]) * 0.0015f; // the output's coupling: the asymmetry's DC out
+                lp[1] += (y - lp[1]) * couple; // the output's coupling: the asymmetry's DC out
                 y -= lp[1];
                 const float click = e[2] * noise.next() + e[1];
                 e[1] *= ec[1], e[2] *= ec[2];
@@ -496,6 +504,8 @@ struct Voice
             res[2].tune (c * 4.5f * x[4], decayCoef (decay * 0.6f * ringOf (2), sh.rate));
             res[2].strike (amp * 0.6f);
         }
+        else
+            res[2].clear();
         x[0] = 0.6f + 0.6f * body;
         x[1] = 1.2f * exp2Fast (0.8f * tone);
         x[2] = slot (3);
@@ -529,7 +539,8 @@ struct Voice
             e[2] *= ec[2];
             out[i] = f[1].hp (y + nz + click) * level;
         }
-        return (e[0] > silent && (res[0].size() > silent || res[1].size() > silent)) || e[1] > silent || e[2] > silent;
+        return (e[0] > silent && (res[0].size() > silent || res[1].size() > silent || (three && res[2].size() > silent))) ||
+               e[1] > silent || e[2] > silent;
     }
 
     // --- Snare ----------------------------------------------------------------------------------------------------
@@ -614,7 +625,7 @@ struct Voice
             else
             {
                 ph[0] += fc;
-                ph[0] -= ph[0] >= 1.0f ? 1.0f : 0.0f;
+                ph[0] -= std::floor (ph[0]);
                 y1 = e[0] * shapedTriangle (ph[0], x[3], x[4]);
                 e[0] *= ec[0];
                 ph[1] += fc * ratio * (1.0f + 1.5f * x[2] * y1);
@@ -741,7 +752,10 @@ struct Voice
             res[0].r = decayCoef (decay, sh.rate);
             res[1].r = decayCoef (decay * 0.8f, sh.rate);
             res[0].strike (amp);
-            res[1].strike (amp);
+            if (x[1] > 0.0f)
+                res[1].strike (amp);
+            else
+                res[1].clear(); // Osc Mix at -1: no second network, nothing of one left ringing unheard
             count = 0;
             const float c = hz * lfoPitch * invRate * (1.0f + x[5] * 0.75f * res[0].size() + x[6]);
             res[0].tune (c);
@@ -797,7 +811,7 @@ struct Voice
                     fc = base * (1.0f + bendMul * penv);
                 }
                 ph[0] += fc;
-                ph[0] -= ph[0] >= 1.0f ? 1.0f : 0.0f;
+                ph[0] -= std::floor (ph[0]);
                 ph[1] += fc * ratio;
                 ph[1] -= std::floor (ph[1]);
                 float w = sin2pi (ph[0]);
@@ -862,7 +876,7 @@ struct Voice
             metalBase[k] = geo * std::pow (set[k] / geo, spread);
             gain[k] = clampf (1.0f + 5.0f * blend - (float) k, 0.0f, 1.0f) * metalWeight[k];
             sum += gain[k];
-            dt[k] = metalBase[k] * hz * lfoPitch * invRate;
+            dt[k] = std::fmin (metalBase[k] * hz * lfoPitch * invRate, 0.3f); // a step under a cycle, even swung by XMod
         }
         x[0] = 0.9f * slot (2);
         x[1] = slot (5);
@@ -870,6 +884,7 @@ struct Voice
         x[3] = 1.0f / std::fmax (sum, 1.0f);
         const float err = slot (6);
         e[0] = amp, ec[0] = decayCoef (decay, sh.rate);
+        e[2] = 0.0f; // the 808 cymbal's top band (set below); in the others it must not keep the voice going
         // The swing VCAs let go below a share of the envelope's peak: the 808 closed hat's fade bends down to nothing
         // (about 90 ms at the default), the open hat's holds then drops.
         const float knee = model == m909 ? 0.0f : spec->knee[model];
@@ -941,20 +956,42 @@ struct Voice
     // The six oscillators and what is added to them, one sample.
     [[gnu::always_inline]] float metal()
     {
-        float prev = prevOsc, sum = 0.0f, o[6];
+        float sum = 0.0f, o[6];
         const float xmod = x[0], duty = model == m808 ? 0.4798f : 0.5f;
-        for (int k = 0; k < 6; ++k)
+        if (xmod == 0.0f)
         {
-            const float d = dt[k] * (1.0f + xmod * prev);
-            const float v = rectAt (ph[k], d, duty);
-            ph[k] += d;
-            ph[k] -= ph[k] >= 1.0f ? 1.0f : 0.0f;
-            ph[k] += ph[k] < 0.0f ? 1.0f : 0.0f;
-            prev = v;
-            o[k] = v;
-            sum += gain[k] * v;
+            // No cross-modulation: each oscillator runs on its own (its step exactly dt, its phase never below 0),
+            // so the six are worked out four at a time.
+            const f4 one = { 1.0f, 1.0f, 1.0f, 1.0f }, none = {};
+            f4 pa, pb = { 0.25f, 0.25f, 0.25f, 0.25f }, da, db = { 0.01f, 0.01f, 0.01f, 0.01f };
+            std::memcpy (&pa, ph, sizeof (float) * 4), std::memcpy (&pb, ph + 4, sizeof (float) * 2);
+            std::memcpy (&da, dt, sizeof (float) * 4), std::memcpy (&db, dt + 4, sizeof (float) * 2);
+            const f4 va = rectAt4 (pa, da, duty), vb = rectAt4 (pb, db, duty);
+            pa += da, pb += db;
+            pa -= pa >= 1.0f ? one : none;
+            pb -= pb >= 1.0f ? one : none;
+            std::memcpy (ph, &pa, sizeof (float) * 4), std::memcpy (ph + 4, &pb, sizeof (float) * 2);
+            o[0] = va[0], o[1] = va[1], o[2] = va[2], o[3] = va[3], o[4] = vb[0], o[5] = vb[1];
+            for (int k = 0; k < 6; ++k)
+                sum += gain[k] * o[k];
+            prevOsc = o[5];
         }
-        prevOsc = prev;
+        else
+        {
+            float prev = prevOsc;
+            for (int k = 0; k < 6; ++k)
+            {
+                const float d = dt[k] * (1.0f + xmod * prev);
+                const float v = rectAt (ph[k], d, duty);
+                ph[k] += d;
+                ph[k] -= ph[k] >= 1.0f ? 1.0f : 0.0f;
+                ph[k] += ph[k] < 0.0f ? 1.0f : 0.0f;
+                prev = v;
+                o[k] = v;
+                sum += gain[k] * v;
+            }
+            prevOsc = prev;
+        }
         float m = sum * x[3];
         if (x[1] > 0.0f)
             m += x[1] * ((o[0] * o[1] + o[2] * o[3] + o[4] * o[5]) * (1.0f / 3.0f) - m);
@@ -1107,6 +1144,8 @@ struct Voice
             res[1].tune (hz * lfoPitch * 1.47f * invRate, decayCoef (decay * 0.7f, sh.rate));
             res[1].strike (amp * 0.6f);
         }
+        else
+            res[1].clear(); // a 909 hit's second network, unheard here, must not keep the voice going
         e[1] = amp * slot (0) * 0.8f, ec[1] = decayCoef (0.0015f, sh.rate);
         lpa[0] = onePoleCoef (1500.0f, sh.rate);
         x[0] = slot (1);

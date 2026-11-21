@@ -37,7 +37,7 @@ struct Reverb
         {
             len[i] = (int) std::lround (base[i] * scale);
             size[i] = len[i] + (int) (16.0f * scale) + 4;
-            buf[i].assign ((size_t) size[i] + 1, 0.0f); // and a guard: a copy of the first sample, after the last
+            buf[i].assign ((size_t) size[i] + 2, 0.0f); // and two guards: copies of the first two samples, after the last
             w[i] = 0;
             modPh[i] = 0.13f * (float) i;
             modInc[i] = (0.31f + 0.07f * (float) i) / rate;
@@ -128,11 +128,11 @@ struct Reverb
             for (int i = 0; i < lines; ++i)
             {
                 float at = (float) w[i] - offset[i];
-                at += at < 0.0f ? (float) size[i] : 0.0f;
+                at += at < 0.0f ? (float) size[i] : 0.0f; // a hair under 0, plus the size, can round up to it: the guards
                 const int i0 = (int) at;
                 const float frac = at - (float) i0;
                 const float* const b = line[i];
-                const float y = b[i0] + frac * (b[i0 + 1] - b[i0]); // past the end, the guard: the first sample
+                const float y = b[i0] + frac * (b[i0 + 1] - b[i0]); // past the end, the guards: the first samples
                 lp[i] += (y - lp[i]) * dampA;
                 d[i] = lp[i];
                 sum += d[i];
@@ -142,8 +142,8 @@ struct Reverb
             {
                 const float into = (d[i] - sum) * g[i] + ((i & 1) ? -0.35f : 0.35f) * v;
                 line[i][w[i]] = into;
-                if (w[i] == 0)
-                    line[i][size[i]] = into; // the guard keeps up
+                if (w[i] < 2)
+                    line[i][size[i] + w[i]] = into; // the guards keep up
                 w[i] = w[i] + 1 == size[i] ? 0 : w[i] + 1;
             }
             const float l = (d[0] - d[2] + d[4] - d[6]) * 0.5f * level, rr = (d[1] - d[3] + d[5] - d[7]) * 0.5f * level;
@@ -177,8 +177,8 @@ struct Delay
     {
         rate = sampleRate;
         size = (int) (2.6f * rate) + 4;
-        bl.assign ((size_t) size, 0.0f);
-        br.assign ((size_t) size, 0.0f);
+        bl.assign ((size_t) size + 2, 0.0f); // and two guards: copies of the first two samples, after the last
+        br.assign ((size_t) size + 2, 0.0f);
         wowInc = 0.6f / rate;
         clear();
     }
@@ -193,7 +193,8 @@ struct Delay
     }
     void set (double seconds, float fb, float tone, int m, float lvl, float rev)
     {
-        target = (float) std::fmin (std::fmax (seconds * rate, 1.0), (double) size - 8.0);
+        // Under the buffer with room for Tape's wow (up to 0.3 % longer).
+        target = (float) std::fmin (std::fmax (seconds * rate, 1.0), (double) size / 1.004 - 8.0);
         if (fresh)
             cur = target;
         feedback = fb, mode = m, level = lvl, toRev = rev;
@@ -204,11 +205,10 @@ struct Delay
     float read (const std::vector<float>& b, float delay) const
     {
         float at = (float) w - delay;
-        at += at < 0.0f ? (float) size : 0.0f;
+        at += at < 0.0f ? (float) size : 0.0f; // a hair under 0, plus the size, can round up to it: the guards
         const int i0 = (int) at;
         const float frac = at - (float) i0;
-        const int i1 = i0 + 1 == size ? 0 : i0 + 1;
-        return b[(size_t) i0] + frac * (b[(size_t) i1] - b[(size_t) i0]);
+        return b[(size_t) i0] + frac * (b[(size_t) i0 + 1] - b[(size_t) i0]);
     }
     // Adds the echoes of `in` to left and right, and Delay > Reverb's share of them to `rev`.
     void process (const float* in, float* left, float* right, float* rev, int n)
@@ -250,6 +250,8 @@ struct Delay
                 bl[(size_t) w] = x + feedback * tanhFast (1.2f * fl) * 0.95f;
             else
                 bl[(size_t) w] = x + feedback * fl;
+            if (w < 2) // the guards keep up
+                bl[(size_t) (size + w)] = bl[(size_t) w], br[(size_t) (size + w)] = br[(size_t) w];
             w = w + 1 == size ? 0 : w + 1;
             left[s] += yl * level;
             right[s] += yr * level;

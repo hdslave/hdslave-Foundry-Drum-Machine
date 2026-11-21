@@ -15,26 +15,38 @@ what the TR's own would.
 
 ## The kit
 
-Pads A01-A16 (MIDI notes 36-51), each a voice; **Key Map: GM** moves them to General MIDI keys instead.
+Pads A01-A16 (MIDI notes 36-51), each a voice, from the bottom left along each row and up; **Key Map: GM** moves
+them to General MIDI keys instead.
+
+```
+  A13 RD   A14 CL   A15 MA   A16 CG
+  A09 LT   A10 MT   A11 HT   A12 CB
+  A05 B2   A06 RS   A07 CY   A08 OH
+  A01 BD   A02 SD   A03 CP   A04 CH
+```
 
 | Pad | Note | Voice | Type | Opens as | GM keys |
 |---|---|---|---|---|---|
 | A01 | 36 | BD Bass Drum | kick | 808 | 36 |
-| A02 | 37 | RS Rim Shot | rim | 808 | 37 |
-| A03 | 38 | SD Snare Drum | snare | 909 | 38, 40 |
-| A04 | 39 | CP Hand Clap | clap | 808 | 39 |
-| A05 | 40 | LT Low Tom | tom | 808 | 41, 43 |
-| A06 | 41 | MT Mid Tom | tom | 808 | 45, 47 |
-| A07 | 42 | HT High Tom | tom | 808 | 48, 50 |
-| A08 | 43 | CH Closed Hat | hat | 808 | 42, 44 |
-| A09 | 44 | OH Open Hat | hat | 808 | 46 |
-| A10 | 45 | CY Crash | cymbal | 808 | 49, 52, 55, 57 |
-| A11 | 46 | RD Ride | cymbal | 909 | 51, 53, 59 |
+| A02 | 37 | SD Snare Drum | snare | 909 | 38, 40 |
+| A03 | 38 | CP Hand Clap | clap | 808 | 39 |
+| A04 | 39 | CH Closed Hat | hat | 808 | 42, 44 |
+| A05 | 40 | B2 Bass Drum 2 | kick | 909 | 35 |
+| A06 | 41 | RS Rim Shot | rim | 808 | 37 |
+| A07 | 42 | CY Crash | cymbal | 808 | 49, 52, 55, 57 |
+| A08 | 43 | OH Open Hat | hat | 808 | 46 |
+| A09 | 44 | LT Low Tom | tom | 808 | 41, 43 |
+| A10 | 45 | MT Mid Tom | tom | 808 | 45, 47 |
+| A11 | 46 | HT High Tom | tom | 808 | 48, 50 |
 | A12 | 47 | CB Cowbell | cowbell | 808 | 56 |
-| A13 | 48 | CL Claves | clave | 808 | 75, 76, 77 |
-| A14 | 49 | MA Maracas | maraca | 808 | 70, 69 |
-| A15 | 50 | CG Conga | tom | 808 | 62, 63, 64 |
-| A16 | 51 | B2 Bass Drum 2 | kick | 909 | 35 |
+| A13 | 48 | RD Ride | cymbal | 909 | 51, 53, 59 |
+| A14 | 49 | CL Claves | clave | 808 | 75, 76, 77 |
+| A15 | 50 | MA Maracas | maraca | 808 | 70, 69 |
+| A16 | 51 | CG Conga | tom | 808 | 62, 63, 64 |
+
+0.6.0 moved the voices to these pads (before, A01-A16 ran BD, RS, SD, CP, LT, MT, HT, CH, OH, CY, RD, CB, CL, MA, CG,
+B2): a pattern recorded on 0.5 or earlier plays other voices now. A saved project's voice settings are kept, as each
+voice keeps its parameters.
 
 **Keys Voice** (Off, or any voice) makes every other note play that voice transposed: with Pads, note 60 is the voice
 at its own pitch (pad bank B, notes 52-67, is -8 to +7 semitones; bank C goes on up); with GM, notes from 84 up, 96
@@ -181,7 +193,7 @@ at the default, the open hat about 300 ms.
 | Control | |
 |---|---|
 | Reverb Level, Time (0.3 – 12 s), Pre-Delay (0 – 200 ms), Tone, Low Cut (20 Hz – 1 kHz), Mod | eight lines in a feedback network, gently modulated |
-| Delay Level, Time (1/32 – 1/2, triplets and dotted, at the host's tempo), Feedback, Tone, Mode (Mono / Ping-Pong / Tape), Delay > Reverb | |
+| Delay Level, Time (1/32 – 1/2, triplets and dotted, at the host's tempo, up to 2.6 s), Feedback, Tone, Mode (Mono / Ping-Pong / Tape), Delay > Reverb | Tape's saturating loop runs away above about 88 % Feedback, as a tape echo does: it then echoes until turned down |
 | SC Source, SC Release | the side chain: see below |
 | Comp, Comp Attack, Comp Release, Comp Mix, Comp Key | the bus compressor: Comp sets threshold and ratio together, with makeup |
 | Analog Filter, Analog Reso, Analog Drive | the TR-1000's analog FX: one knob from a low pass (left) through off to a high pass (right), then drive |
@@ -315,11 +327,12 @@ Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 607,000 | 12.6 % |
-| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 139,000 | 2.9 % |
+| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 596,000 | 12.4 % |
+| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 135,000 | 2.8 % |
 | Stopped | about 3,800 | 0.08 % |
 
-A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. A
+A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. The
+hats' six oscillators are worked out four at a time on the NEON unit while XMod is at 0 (their default). A
 voice's shared chain costs nothing while none of it is on, and a send at zero is skipped. The
 knobs that move between hits are worked out every 16 samples; the resonators that retune every sample (the kick's
 glide and sigh, the toms' diodes) use a short Taylor series instead of full sines. The real share on the MPC depends on how many
@@ -333,11 +346,12 @@ Needs Docker with a Linux arm64 context (Melodee's `colima-melodee` and its `mel
 ./build.sh          # build/Foundry.clap, then the tests (tests/host.cpp), the sound's fingerprint and demo renders build/demo-*.wav
 ./build.sh bench    # build/bench
 tools/bench.sh      # instruction counts (Melodee's melodee-profiler image)
+./build.sh sanitize # the tests and every fingerprint scenario under AddressSanitizer and UBSan
 ```
 
 The tests load the plug-in through the CLAP API and check:
 
-- description, ports (the mix and SC Key), note names and the drum map Melodee reads;
+- description, ports (the mix and SC Key), note names and the drum map Melodee reads (each pad's voice);
 - every parameter's range, text both ways and default, and each voice's block starting a row;
 - state save and load (and a state from another version); the presets as preset discovery lists them, each playing;
 - every voice in every model sounding, starting on its frame, bounded and ending;
@@ -352,6 +366,10 @@ The tests load the plug-in through the CLAP API and check:
 - the Keys voice's pitch, Tune, Kit Tune, the GM map, MIDI notes;
 - the side chain three ways; the reverb, ping-pong delay, analog filter, compressor and Limit;
 - the same output whatever the block size (1, 37, 128, 4096 frames, settings and notes on the first frame too);
+- every voice ending when its sound does, whatever was played before (the toms' and conga's unheard second network,
+  a Model switched between hits, the 909 rim's last network); pitches far past the design range (the Keys voice at
+  its top) staying stable; a choke from the host reaching linked voices, and key -1 every voice; Cycle on downbeats
+  placed on the nearest frame; the Tape delay at its longest; the 909 kick's coupling the same at 192 kHz;
 - finite, bounded output at 36 random and extreme settings at 44.1, 48 and 96 kHz.
 
 `tests/fingerprint.cpp` then renders 93 fixed scenarios (each preset, each voice in each model, the shared chain,

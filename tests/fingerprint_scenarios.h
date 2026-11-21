@@ -1,7 +1,12 @@
 // The fingerprint's scenarios (included by fingerprint.cpp). New scenarios go at the end; a random scenario draws
 // over the parameter list of its version (names below), so parameters added later stay at their defaults there.
 
-// A two-bar beat over every pad, with ghost notes and accents, from `start` frames, 1/16 = `step` frames.
+// The pad (note) each voice plays on (0.6.0's layout), so the scenarios hit the same voices whatever their pads:
+// by voice BD RS SD CP LT MT HT CH OH CY RD CB CL MA CG B2.
+constexpr int padOfVoice[16] = { 0, 5, 1, 2, 8, 9, 10, 3, 7, 6, 12, 11, 13, 14, 15, 4 };
+constexpr int padKey (int voice) { return 36 + padOfVoice[voice]; }
+
+// A two-bar beat over every voice, with ghost notes and accents, from `start` frames, 1/16 = `step` frames.
 inline std::vector<Event> beat (uint64_t step = 6000, int bars = 2, uint64_t start = 0)
 {
     std::vector<Event> e;
@@ -9,11 +14,11 @@ inline std::vector<Event> beat (uint64_t step = 6000, int bars = 2, uint64_t sta
         for (int s = 0; s < 16; ++s)
         {
             const uint64_t f = start + (uint64_t) (b * 16 + s) * step;
-            if (s % 4 == 0 || s == 14) e.push_back ({ f, Event::noteOn, "", 36, s == 0 ? 1.0 : 0.85 });
-            if (s == 4 || s == 12) e.push_back ({ f, Event::noteOn, "", 38, 0.9 });
-            if (s == 12) e.push_back ({ f, Event::noteOn, "", 39, 0.8 });
-            e.push_back ({ f, Event::noteOn, "", (double) (s % 4 == 2 ? 44 : 43), s % 2 ? 0.5 : 0.8 });
-            e.push_back ({ f, Event::noteOn, "", (double) (36 + (b * 16 + s) * 5 % 16), 0.4 + 0.04 * (s % 9) });
+            if (s % 4 == 0 || s == 14) e.push_back ({ f, Event::noteOn, "", (double) padKey (0), s == 0 ? 1.0 : 0.85 });
+            if (s == 4 || s == 12) e.push_back ({ f, Event::noteOn, "", (double) padKey (2), 0.9 });
+            if (s == 12) e.push_back ({ f, Event::noteOn, "", (double) padKey (3), 0.8 });
+            e.push_back ({ f, Event::noteOn, "", (double) padKey (s % 4 == 2 ? 8 : 7), s % 2 ? 0.5 : 0.8 });
+            e.push_back ({ f, Event::noteOn, "", (double) padKey ((b * 16 + s) * 5 % 16), 0.4 + 0.04 * (s % 9) });
         }
     return e;
 }
@@ -42,8 +47,8 @@ inline std::vector<Scenario> scenarios()
             s.name = std::string ("voice-") + tags[v] + "-" + std::to_string (m);
             s.seconds = 3.0;
             s.values = { { std::string (tags[v]) + " Model", (double) m } };
-            s.events = { { 0, Event::noteOn, "", (double) (36 + v), 0.5 }, { 30000, Event::noteOn, "", (double) (36 + v), 1.0 },
-                         { 33000, Event::noteOn, "", (double) (36 + v), 0.7 } };
+            s.events = { { 0, Event::noteOn, "", (double) padKey (v), 0.5 }, { 30000, Event::noteOn, "", (double) padKey (v), 1.0 },
+                         { 33000, Event::noteOn, "", (double) padKey (v), 0.7 } };
             list.push_back (s);
         }
     // The shared chain on every voice: bend through its four characters, drive, each filter with its envelope.
@@ -139,7 +144,7 @@ inline std::vector<Scenario> scenarios()
             s.events.push_back ({ f, Event::param, std::string (tags[(k + 5) % 16]) + " Decay", 0.1 + 0.02 * k });
             s.events.push_back ({ f, Event::param, "Kit Decay", -0.5 + 0.025 * k });
         }
-        s.events.push_back ({ 50000, Event::choke, "", 44 });
+        s.events.push_back ({ 50000, Event::choke, "", (double) padKey (8) });
         list.push_back (s);
     }
     for (uint32_t block : { 1u, 37u, 4096u })

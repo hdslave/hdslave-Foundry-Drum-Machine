@@ -29,17 +29,18 @@ const clap_plugin_descriptor descriptor {
 };
 
 // The kit's pads as Melodee reads them from a drum plug-in's library: with this, a plug-in track on Foundry plays
-// its pads as a kit (pads A01-A16 are notes 36-51) and names them. Kept in the binary by voicesJson() below.
+// its pads as a kit (pads A01-A16 are notes 36-51, in padVoice's order) and names them. Kept in the binary by
+// voicesJson() below; host.cpp checks it against the note names.
 [[gnu::used]] const char drumMapJson[] =
     "{\"pad_layout\":\"drums\",\"name\":\"hdslave Foundry\",\"levels\":{"
-    "\"bd\":{\"name\":\"Bass Drum\",\"note\":36},\"rs\":{\"name\":\"Rim Shot\",\"note\":37},"
-    "\"sd\":{\"name\":\"Snare Drum\",\"note\":38},\"cp\":{\"name\":\"Hand Clap\",\"note\":39},"
-    "\"lt\":{\"name\":\"Low Tom\",\"note\":40},\"mt\":{\"name\":\"Mid Tom\",\"note\":41},"
-    "\"ht\":{\"name\":\"High Tom\",\"note\":42},\"ch\":{\"name\":\"Closed Hat\",\"note\":43},"
-    "\"oh\":{\"name\":\"Open Hat\",\"note\":44},\"cy\":{\"name\":\"Crash\",\"note\":45},"
-    "\"rd\":{\"name\":\"Ride\",\"note\":46},\"cb\":{\"name\":\"Cowbell\",\"note\":47},"
-    "\"cl\":{\"name\":\"Claves\",\"note\":48},\"ma\":{\"name\":\"Maracas\",\"note\":49},"
-    "\"cg\":{\"name\":\"Conga\",\"note\":50},\"b2\":{\"name\":\"Bass Drum 2\",\"note\":51}}}";
+    "\"bd\":{\"name\":\"Bass Drum\",\"note\":36},\"sd\":{\"name\":\"Snare Drum\",\"note\":37},"
+    "\"cp\":{\"name\":\"Hand Clap\",\"note\":38},\"ch\":{\"name\":\"Closed Hat\",\"note\":39},"
+    "\"b2\":{\"name\":\"Bass Drum 2\",\"note\":40},\"rs\":{\"name\":\"Rim Shot\",\"note\":41},"
+    "\"cy\":{\"name\":\"Crash\",\"note\":42},\"oh\":{\"name\":\"Open Hat\",\"note\":43},"
+    "\"lt\":{\"name\":\"Low Tom\",\"note\":44},\"mt\":{\"name\":\"Mid Tom\",\"note\":45},"
+    "\"ht\":{\"name\":\"High Tom\",\"note\":46},\"cb\":{\"name\":\"Cowbell\",\"note\":47},"
+    "\"rd\":{\"name\":\"Ride\",\"note\":48},\"cl\":{\"name\":\"Claves\",\"note\":49},"
+    "\"ma\":{\"name\":\"Maracas\",\"note\":50},\"cg\":{\"name\":\"Conga\",\"note\":51}}}";
 const char* voicesJson()
 {
     const char* volatile json = drumMapJson;
@@ -142,7 +143,7 @@ void handle (Plugin& p, const clap_event_header* e)
         case CLAP_EVENT_NOTE_CHOKE:
         {
             const auto* n = reinterpret_cast<const clap_event_note*> (e);
-            if (n->key >= 0 && n->key < 128)
+            if (n->key >= -1 && n->key < 128) // -1: every key
                 p.engine.chokeKey (n->key);
             break;
         }
@@ -330,9 +331,9 @@ bool noteNameGet (const clap_plugin*, uint32_t index, clap_note_name* name)
     if (index >= (uint32_t) voiceCount)
         return false;
     *name = {};
-    std::snprintf (name->name, sizeof (name->name), "%s", voiceSpecs[index].name);
+    std::snprintf (name->name, sizeof (name->name), "%s", voiceSpecs[padVoice[index]].name);
     name->port = -1;
-    name->key = (int16_t) (36 + index);
+    name->key = (int16_t) (36 + index); // pad `index`
     name->channel = -1;
     return true;
 }

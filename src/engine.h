@@ -26,7 +26,7 @@ struct Hit
 
 struct Engine
 {
-    static constexpr int queueSize = 48;
+    static constexpr int queueSize = 64;
 
     Voice voices[voiceCount];
     float m[M::count] {};
@@ -179,7 +179,7 @@ struct Engine
             {
                 anchorBeats = target, anchorSample = now;
                 if (! playing)
-                    playBar = std::floor (target / barBeats + 1e-9);
+                    playBar = barOf (target);
             }
         }
         playing = play;
@@ -191,7 +191,7 @@ struct Engine
     {
         transpose = 0.0f;
         const bool gm = m[M::keyMap] >= 0.5f;
-        int v = gm ? gmVoice[key & 127] : (key >= 36 && key < 36 + voiceCount ? key - 36 : -1);
+        int v = gm ? gmVoice[key & 127] : (key >= 36 && key < 36 + voiceCount ? (int) padVoice[key - 36] : -1);
         if (v >= 0)
             return v;
         const int keys = (int) m[M::keysVoice];
@@ -213,17 +213,26 @@ struct Engine
                 hitVoice (u, velocity, transpose);
     }
 
-    // A choke from the host (a pad cut): the voice fades and its waiting hits go.
+    // A choke from the host (a pad cut): the voice and the voices linked to it fade, and their waiting hits go.
+    // Key -1: every voice.
     void chokeKey (int key)
     {
         float transpose = 0.0f;
-        const int v = voiceOf (key, transpose);
-        if (v < 0)
+        const int v = key < 0 ? -1 : voiceOf (key, transpose);
+        if (v < 0 && key >= 0)
             return;
-        voices[v].choke();
-        queued[v] = 0;
+        for (int u = 0; u < voiceCount; ++u)
+            if (key < 0 || u == v || (int) voices[u].p[V::link] == v + 1)
+            {
+                voices[u].choke();
+                queued[u] = 0;
+            }
         findNextDue();
     }
+
+    // The bar a place in the song is in, counted from its top. A note a hair before a bar line (a host that puts
+    // notes on the nearest frame) is in the new bar: half a sample of slack.
+    double barOf (double beats) const { return std::floor ((beats + 0.5 * beatsPerSample()) / barBeats); }
 
     // The voice's random numbers: from the song's place when playing (the same hits when the same part plays
     // again), from a count of its hits when stopped.
@@ -248,7 +257,7 @@ struct Engine
         const int cycle = (int) voice.p[V::cycle];
         if (playing && cycle != 0)
         {
-            const double bar = std::floor (beats / barBeats + 1e-9);
+            const double bar = barOf (beats);
             const int nth = cycleOf[cycle][0], every = cycleOf[cycle][1];
             if (every == 0)
             {

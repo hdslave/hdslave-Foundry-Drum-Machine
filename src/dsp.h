@@ -139,6 +139,11 @@ struct Resonator
     // a third of tune's cost, for the voices retuned every sample (the kick's glide and sigh, the toms' diodes).
     void tuneLow (float cycles)
     {
+        if (cycles > 0.05f) // past about 2.4 kHz at 48 kHz the series' gain errs above 1: the full sine and cosine
+        {
+            tune (cycles);
+            return;
+        }
         const float w = 2.0f * pi * cycles, w2 = w * w;
         c = r * (1.0f - w2 * (0.5f - w2 * (1.0f / 24.0f)));
         s = r * w * (1.0f - w2 * (1.0f / 6.0f) * (1.0f - w2 * (1.0f / 20.0f)));
@@ -168,7 +173,7 @@ struct Resonator
 // --- Band-limited square -----------------------------------------------------------------------------------------
 // Polynomial BLEP at both edges: cheap, and clean enough for the metal oscillators (a few hundred hertz into
 // band-pass filters a few octaves up).
-inline float blep (float t, float dt)
+[[gnu::always_inline]] inline float blep (float t, float dt)
 {
     if (t < dt)
     {
@@ -182,7 +187,7 @@ inline float blep (float t, float dt)
     }
     return 0.0f;
 }
-inline float squareAt (float phase, float dt)
+[[gnu::always_inline]] inline float squareAt (float phase, float dt)
 {
     float half = phase + 0.5f;
     half -= half >= 1.0f ? 1.0f : 0.0f;
@@ -190,20 +195,40 @@ inline float squareAt (float phase, float dt)
 }
 // A rectangle high for `duty` of its cycle: the 808's Schmitt-trigger oscillators run at 47.98 % (Werner), which
 // adds the even harmonics that fill the cowbell's and the metal's spectra between the odd ones.
-inline float rectAt (float phase, float dt, float duty)
+[[gnu::always_inline]] inline float rectAt (float phase, float dt, float duty)
 {
     float fall = phase + 1.0f - duty;
     fall -= fall >= 1.0f ? 1.0f : 0.0f;
     return (phase < duty ? 1.0f : -1.0f) + blep (phase, dt) - blep (fall, dt);
 }
 
+// The same, four oscillators at a time (the NEON unit's width): lane by lane the very operations above, so the
+// very results. Both edges' polynomials are worked out and the right one picked.
+using f4 = float __attribute__ ((vector_size (16)));
+[[gnu::always_inline]] inline f4 blep4 (f4 t, f4 dt)
+{
+    const f4 one = { 1.0f, 1.0f, 1.0f, 1.0f }, none = {};
+    const f4 a = t / dt, b = (t - 1.0f) / dt;
+    f4 aa = a * a;
+    asm ("" : "+w"(aa)); // rounded on its own, as the compiler does it in blep, not fused into the subtraction
+    const f4 rise = a + a - aa - 1.0f, fall = b * b + b + b + 1.0f;
+    return t < dt ? rise : (t > one - dt ? fall : none);
+}
+[[gnu::always_inline]] inline f4 rectAt4 (f4 phase, f4 dt, float duty)
+{
+    const f4 one = { 1.0f, 1.0f, 1.0f, 1.0f }, none = {}, high = one, low = -one;
+    f4 fall = phase + 1.0f - duty;
+    fall -= fall >= 1.0f ? one : none;
+    return (phase < duty ? high : low) + blep4 (phase, dt) - blep4 (fall, dt);
+}
+
 // A one-pole high pass at a few hertz: what the rectifying bends add as DC comes out.
 struct DcBlock
 {
-    float x1 = 0.0f, y1 = 0.0f;
+    float x1 = 0.0f, y1 = 0.0f, a = 0.9985f; // a: its pole, about 11.5 Hz (0.9985 at 48 kHz)
     float run (float x)
     {
-        const float y = x - x1 + 0.9985f * y1;
+        const float y = x - x1 + a * y1;
         x1 = x, y1 = y;
         return y;
     }

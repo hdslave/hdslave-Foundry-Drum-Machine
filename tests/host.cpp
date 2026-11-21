@@ -21,6 +21,7 @@
 #include <map>
 #include <random>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -301,6 +302,11 @@ const char* const tags[] = { "BD", "RS", "SD", "CP", "LT", "MT", "HT", "CH", "OH
 const char* const models[] = { "808", "909", "606" };
 
 // Every voice silent but `keep` (its level), the effects dry.
+// The pad (note, Key Map Pads) a voice plays on: from A01 (note 36, bottom left) BD, SD, CP, CH; B2, RS, CY, OH;
+// LT, MT, HT, CB; RD, CL, MA, CG. By voice: BD RS SD CP LT MT HT CH OH CY RD CB CL MA CG B2.
+constexpr int padOfVoice[16] = { 0, 5, 1, 2, 8, 9, 10, 3, 7, 6, 12, 11, 13, 14, 15, 4 };
+constexpr int padKey (int voice) { return 36 + padOfVoice[voice]; }
+
 std::vector<std::pair<std::string, double>> solo (int keep)
 {
     std::vector<std::pair<std::string, double>> v;
@@ -337,8 +343,12 @@ void testDescription()
     const auto* names = static_cast<const clap_plugin_note_name*> (i.plugin->get_extension (i.plugin, CLAP_EXT_NOTE_NAME));
     CHECK (names && names->count (i.plugin) == 16);
     clap_note_name nn {};
-    CHECK (names && names->get (i.plugin, 0, &nn) && nn.key == 36 && std::strcmp (nn.name, "Bass Drum") == 0);
-    CHECK (names && names->get (i.plugin, 15, &nn) && nn.key == 51 && std::strcmp (nn.name, "Bass Drum 2") == 0);
+    // Pads A01-A16 from the bottom left, along each row and up.
+    static const char* const padNames[16] = { "Bass Drum", "Snare Drum", "Hand Clap", "Closed Hat", "Bass Drum 2", "Rim Shot",
+                                              "Crash", "Open Hat", "Low Tom", "Mid Tom", "High Tom", "Cowbell", "Ride",
+                                              "Claves", "Maracas", "Conga" };
+    for (uint32_t k = 0; k < 16; ++k)
+        CHECK_MSG (names && names->get (i.plugin, k, &nn) && nn.key == 36 + (int) k && std::strcmp (nn.name, padNames[k]) == 0, "pad %u", k);
 }
 
 // Melodee finds a drum machine's pads by a JSON map in its library: "pad_layout":"drums" and a name and a note for
@@ -357,8 +367,13 @@ void testDrumMap (const char* path)
     for (int k = 36; k <= 51; ++k)
         notes += map.find ("\"note\":" + std::to_string (k) + "}") != std::string::npos;
     CHECK (notes == 16);
+    // Each pad named as the note-name extension names it: A01-A16 from the bottom left, along each row and up.
+    static const char* const padNames[16] = { "Bass Drum", "Snare Drum", "Hand Clap", "Closed Hat", "Bass Drum 2", "Rim Shot",
+                                              "Crash", "Open Hat", "Low Tom", "Mid Tom", "High Tom", "Cowbell", "Ride",
+                                              "Claves", "Maracas", "Conga" };
+    for (int k = 0; k < 16; ++k)
+        CHECK_MSG (map.find ("\"name\":\"" + std::string (padNames[k]) + "\",\"note\":" + std::to_string (36 + k) + "}") != std::string::npos, "pad %d", k);
     CHECK (map.back() == '}');
-    CHECK (map.find ("\"name\":\"Closed Hat\",\"note\":43") != std::string::npos);
 }
 
 void testParameters()
@@ -533,9 +548,9 @@ void testPresets()
         for (int s = 0; s < 16; ++s)
         {
             const uint64_t f = (uint64_t) s * 6000;
-            if (s % 4 == 0) beat.push_back ({ f, 36, 1.0 });
-            if (s % 8 == 4) beat.push_back ({ f, 38, 0.9 });
-            beat.push_back ({ f, s % 4 == 2 ? 44 : 43, 0.7 });
+            if (s % 4 == 0) beat.push_back ({ f, padKey (0), 1.0 });
+            if (s % 8 == 4) beat.push_back ({ f, padKey (2), 0.9 });
+            beat.push_back ({ f, padKey (s % 4 == 2 ? 8 : 7), 0.7 });
         }
         std::vector<float> l, r;
         k.play (96000 + 48000, beat, l, r, true);
@@ -556,7 +571,7 @@ void testVoices()
             values.push_back ({ std::string (tags[v]) + " Model", model });
             i.setup (values);
             std::vector<float> l, r;
-            i.play (48000 * 9, { { 1000, 36 + v, 0.75 } }, l, r);
+            i.play (48000 * 9, { { 1000, padKey (v), 0.75 } }, l, r);
             const double peak = peakOf (l), rms = std::sqrt (energyOf (l, 1000, 1000 + 2400) / 2400.0), length = lengthOf (l, 48000.0);
             std::printf ("  %-5s  %-5s  %5.3f   %6.4f    %5.2f s\n", tags[v], models[model], peak, rms, length - 1000.0 / 48000.0);
             CHECK_MSG (peak > 0.05 && peak < 1.0, "%s %s peak %g", tags[v], models[model], peak);
@@ -598,7 +613,7 @@ void testCharacter()
         values.insert (values.end(), extra.begin(), extra.end());
         i.setup (values);
         std::vector<float> l, r;
-        i.play (frames, { { 0, 36 + voice, vel } }, l, r);
+        i.play (frames, { { 0, padKey (voice), vel } }, l, r);
         return l;
     };
     // 808 kick, as recorded from the machine: a short first lobe (the cosine-phase strike and the raised attack), the
@@ -660,7 +675,7 @@ void testCharacter()
         values.insert (values.end(), { { "OH Model", 1.0 }, { "Clip", 0.0 }, { "OH Level", 0.0 } });
         i.setup (values);
         std::vector<float> l, r;
-        i.play (24000, { { 0, 44, 1.0 } }, l, r);
+        i.play (24000, { { 0, padKey (8), 1.0 } }, l, r);
         // Before the output low pass the words repeat; after it, the 30 kHz images are gone but the spectrum keeps
         // a notch near the clock: little power at 30 kHz's image (18 kHz) against 9 kHz.
         CHECK (powerAt (l, 0, 4800, 18000.0, 48000.0) < powerAt (l, 0, 4800, 9000.0, 48000.0));
@@ -676,7 +691,7 @@ void testVelocityAccent()
         values.insert (values.end(), extra.begin(), extra.end());
         i.setup (values);
         std::vector<float> l, r;
-        i.play (24000, { { 0, 38, vel } }, l, r);
+        i.play (24000, { { 0, padKey (2), vel } }, l, r);
         return peakOf (l);
     };
     const double soft = peakAt (0.3, {}), loud = peakAt (0.75, {});
@@ -704,14 +719,14 @@ void testChoke()
                 if (nt.frame >= at && nt.frame < at + n)
                     e.note ((uint32_t) (nt.frame - at), CLAP_EVENT_NOTE_ON, (int16_t) nt.key, nt.velocity);
             if (hostChoke && 12000 >= at && 12000 < at + n)
-                e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, 44, 0.0);
+                e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, padKey (8), 0.0);
         });
     };
     std::vector<float> open, choked, free, cut;
-    render ({ { "OH Decay", 0.8 } }, { { 0, 44 } }, open);
-    render ({ { "OH Decay", 0.8 } }, { { 0, 44 }, { 12000, 43 } }, choked);
-    render ({ { "OH Decay", 0.8 }, { "CH Choke", 0.0 } }, { { 0, 44 }, { 12000, 43 } }, free);
-    render ({ { "OH Decay", 0.8 } }, { { 0, 44 } }, cut, true);
+    render ({ { "OH Decay", 0.8 } }, { { 0, padKey (8) } }, open);
+    render ({ { "OH Decay", 0.8 } }, { { 0, padKey (8) }, { 12000, padKey (7) } }, choked);
+    render ({ { "OH Decay", 0.8 }, { "CH Choke", 0.0 } }, { { 0, padKey (8) }, { 12000, padKey (7) } }, free);
+    render ({ { "OH Decay", 0.8 } }, { { 0, padKey (8) } }, cut, true);
     CHECK (energyOf (open, 14400, 24000) > 1e-4);
     CHECK (peakOf (choked, 14400) < 1e-6); // the CH is silent here (its level); the OH gone within the choke time
     CHECK (same (std::vector<float> (open.begin(), open.end()), free));
@@ -733,11 +748,11 @@ void testModelSwitch()
         std::vector<float> l, r;
         i.render (12000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
             if (first909 && at == 0)
-                e.note (0, CLAP_EVENT_NOTE_ON, 43, 0.8);
+                e.note (0, CLAP_EVENT_NOTE_ON, padKey (7), 0.8);
             if (at <= 2000 && 2000 < at + n)
                 e.param ((uint32_t) (2000 - at), model, 2.0);
             if (at <= 2400 && 2400 < at + n)
-                e.note ((uint32_t) (2400 - at), CLAP_EVENT_NOTE_ON, 43, 0.8);
+                e.note ((uint32_t) (2400 - at), CLAP_EVENT_NOTE_ON, padKey (7), 0.8);
             e.sort();
         });
         return l;
@@ -759,7 +774,7 @@ void testGeneratorControls()
         values.insert (values.end(), extra.begin(), extra.end());
         i.setup (values);
         std::vector<float> l, r;
-        i.play (frames, { { 0, 36 + voice, 0.75 } }, l, r);
+        i.play (frames, { { 0, padKey (voice), 0.75 } }, l, r);
         return l;
     };
     // A four-pole split at `hz`: the energy above it (or below it).
@@ -804,7 +819,7 @@ void testGeneratorControls()
             values.insert (values.end(), { { "CH Level", -60.0 }, { "OH Decay", 0.8 }, { "OH Mute Decay", mute } });
             i.setup (values);
             std::vector<float> l, r;
-            i.play (36000, { { 0, 44, 0.8 }, { 12000, 43, 0.8 } }, l, r);
+            i.play (36000, { { 0, padKey (8), 0.8 }, { 12000, padKey (7), 0.8 } }, l, r);
             return l;
         };
         const auto kit = cut (0.0), slow = cut (1.0);
@@ -818,7 +833,7 @@ void testGeneratorControls()
         values.push_back ({ "BD Nudge", 80.0 });
         i.setup (values);
         std::vector<float> l, r;
-        i.play (12000, { { 600, 36, 0.8 } }, l, r);
+        i.play (12000, { { 600, padKey (0), 0.8 } }, l, r);
         CHECK (onsetOf (l) == 600 + 3840);
     }
     // O1-O3 Tune: the 808 rim's 455 Hz network an octave down at 0 %, its 1667 Hz one an octave up at 100 %; the
@@ -854,10 +869,163 @@ void testGeneratorControls()
     }
 }
 
+// Voices that end when their sound does, whatever was played before; pitches far past the design range; the host's
+// edges (its chokes, bar lines on the nearest frame, a slow Tape delay).
+void testEnds()
+{
+    // A voice is over once it has died away: a later hit fades in again with Attack Time (a voice still going would
+    // not). `firstMs` of the later hit against the first's.
+    auto again = [] (int voice, std::vector<std::pair<std::string, double>> values, std::vector<Note> notes, size_t later) {
+        Instance i;
+        auto all = solo (voice);
+        all.push_back ({ std::string (tags[voice]) + " Attack Time", 0.3 });
+        all.insert (all.end(), values.begin(), values.end());
+        i.setup (all);
+        std::vector<float> l, r;
+        i.render (later + 4800, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            for (const auto& nt : notes)
+                if (nt.frame >= at && nt.frame < at + n)
+                {
+                    if (nt.key < 0) // a Model change
+                        e.param ((uint32_t) (nt.frame - at), i.id (std::string (tags[voice]) + " Model"), nt.velocity);
+                    else
+                        e.note ((uint32_t) (nt.frame - at), CLAP_EVENT_NOTE_ON, (int16_t) nt.key, nt.velocity);
+                }
+            e.sort();
+        });
+        return l;
+    };
+    // Toms and conga at their default Osc Mix (one network): a second network was struck, never rung, never let go.
+    for (int voice : { 4, 5, 6, 14 })
+        for (int model : { 0, 2 })
+        {
+            const int key = padKey (voice);
+            const auto l = again (voice, { { std::string (tags[voice]) + " Model", (double) model } }, { { 0, key, 0.8 }, { 144000, key, 0.8 } }, 144000);
+            const double first = energyOf (l, 0, 96), later = energyOf (l, 144000, 144096);
+            CHECK_MSG (first > 0.0 && std::fabs (later / first - 1.0) < 0.05, "%s model %d: %g then %g", tags[voice], model, first, later);
+        }
+    // A crash hit as the 808's, then the 606's: the 808's top band envelope must not keep it going. The claves hit as
+    // the 909's, then the 808's: nor the 909's second network.
+    for (auto [voice, from, to] : { std::tuple { 9, 0.0, 2.0 }, std::tuple { 12, 1.0, 0.0 } })
+    {
+        const int key = padKey (voice);
+        const auto l = again (voice, { { std::string (tags[voice]) + " Model", from } }, { { 0, key, 0.8 }, { 2000, -1, to }, { 2400, key, 0.8 }, { 240000, key, 0.8 } }, 240000);
+        const auto fresh = again (voice, { { std::string (tags[voice]) + " Model", to } }, { { 0, key, 0.8 } }, 0);
+        CHECK_MSG (energyOf (l, 240000, 240096) < 3.0 * energyOf (fresh, 0, 96), "%s", tags[voice]);
+    }
+    // The 909 rim's third network rings out even when it is the last: no cut while it is still sounding.
+    {
+        Instance i;
+        auto values = solo (1);
+        values.insert (values.end(), { { "RS Model", 1.0 }, { "RS Noise", 0.0 }, { "RS Click", 0.0 }, { "RS O1 Decay", 0.0 }, { "RS O2 Decay", 0.0 }, { "RS O3 Decay", 1.0 }, { "Clip", 0.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (9600, { { 0, padKey (1), 0.8 } }, l, r);
+        const double a = energyOf (l, 960, 1920), b = energyOf (l, 1920, 2880);
+        CHECK_MSG (a > 1e-4 && b > 0.005 * a && b < a, "%g %g", a, b); // (cut, the second was 0)
+    }
+    // Far past the design range (the Keys voice at its top): the kick and conga ring as they should, and die.
+    {
+        auto keys = [] (int voice, std::vector<std::pair<std::string, double>> more, int key, uint64_t frames) {
+            Instance i;
+            auto values = solo (voice);
+            values.insert (values.end(), { { "Keys Voice", (double) (voice + 1) }, { "Clip", 0.0 } });
+            values.insert (values.end(), more.begin(), more.end());
+            i.setup (values);
+            std::vector<float> l, r;
+            i.play (frames, { { 0, key, 0.8 } }, l, r);
+            return l;
+        };
+        const auto bd = keys (0, { { "BD Attack", 1.0 } }, 127, 24000);
+        CHECK_MSG (finiteBounded (bd, 4.0) && peakOf (bd, 480, 2400) > 1e-3, "BD %g", peakOf (bd, 480, 2400));
+        const auto cg = keys (14, { { "CG Osc Mix", 0.0 } }, 127, 4 * 48000);
+        CHECK_MSG (finiteBounded (cg, 4.0) && energyOf (cg, 3 * 48000) < 1e-8, "CG %g", energyOf (cg, 3 * 48000));
+    }
+    // The hats' oscillators past a cycle a sample: their phases stay whole, the next ordinary hit is as loud as ever.
+    for (int model = 0; model < 3; ++model)
+    {
+        auto run = [&] (bool high) {
+            Instance i;
+            auto values = solo (7);
+            values.insert (values.end(), { { "CH Model", (double) model }, { "CH Tune", 12.0 }, { "Keys Voice", 8.0 }, { "Clip", 0.0 } });
+            i.setup (values);
+            std::vector<float> l, r;
+            std::vector<Note> notes = { { 96000, padKey (7), 0.8 } };
+            if (high)
+                notes.insert (notes.begin(), { 0, 127, 0.8 });
+            i.play (120000, notes, l, r);
+            return peakOf (l, 96000);
+        };
+        const double after = run (true), fresh = run (false);
+        CHECK_MSG (after < 2.0 * fresh, "model %d: %g against %g", model, after, fresh);
+    }
+    // The 909 kick's coupling and the bend's DC blocker keep their corners at any rate: B2 as loud at 192 kHz.
+    {
+        auto rms = [] (double rate) {
+            Instance i (rate);
+            auto values = solo (15);
+            values.insert (values.end(), { { "Clip", 0.0 }, { "B2 Bend", 0.4 } });
+            i.setup (values);
+            std::vector<float> l, r;
+            i.play ((uint64_t) (0.3 * rate), { { 0, padKey (15), 0.8 } }, l, r);
+            return std::sqrt (energyOf (l) / (double) l.size());
+        };
+        const double db = 20.0 * std::log10 (rms (192000.0) / rms (48000.0));
+        CHECK_MSG (std::fabs (db) < 0.5, "%.2f dB", db);
+    }
+    // The host's choke reaches the voices linked to the pad, and key -1 chokes every one.
+    for (int key : { padKey (0), -1 })
+    {
+        Instance i;
+        auto values = solo (0);
+        values.insert (values.end(), { { "SD Level", 0.0 }, { "SD Link", 1.0 }, { "SD Decay", 1.0 }, { "BD Decay", 1.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.render (36000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            if (at == 0)
+                e.note (0, CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 0.8);
+            if (at <= 12000 && 12000 < at + n)
+                e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, (int16_t) key, 0.0);
+        });
+        CHECK_MSG (energyOf (l, 12000, 14400) > 1e-6 && peakOf (l, 16800) < 1e-6, "key %d: %g", key, peakOf (l, 16800));
+    }
+    // Cycle 1/2 at 140 BPM with each downbeat on the frame nearest it (a hair before the bar line, half the time):
+    // bars 0, 2, 4 and 6 play.
+    {
+        Instance i;
+        auto values = solo (0);
+        values.push_back ({ "BD Cycle", 1.0 });
+        i.setup (values);
+        const double bar = 4.0 * 60.0 / 140.0 * 48000.0;
+        std::vector<Note> notes;
+        for (int b = 0; b < 8; ++b)
+            notes.push_back ({ (uint64_t) std::llround (b * bar), padKey (0), 0.8 });
+        std::vector<float> l, r;
+        i.play ((uint64_t) (8.5 * bar), notes, l, r, true, 128, 140.0);
+        int pattern = 0;
+        for (int b = 0; b < 8; ++b)
+            pattern |= energyOf (l, (size_t) std::llround (b * bar), (size_t) std::llround (b * bar) + 480) > 1e-4 ? 1 << b : 0;
+        CHECK_MSG (pattern == 0x55, "bars played %02x", pattern);
+    }
+    // Tape at its longest (1/2 at 40 BPM): the wow stays inside the buffer (make sanitize would stop on a stray read).
+    {
+        Instance i;
+        auto values = solo (0);
+        values.insert (values.end(), { { "Delay Mode", 2.0 }, { "Delay Time", 11.0 }, { "Delay Feedback", 0.6 }, { "BD Delay", 1.0 } });
+        i.setup (values);
+        std::vector<Note> notes;
+        for (int k = 0; k < 8; ++k)
+            notes.push_back ({ (uint64_t) k * 72000, padKey (0), 0.9 });
+        std::vector<float> l, r;
+        i.play (12 * 48000, notes, l, r, true, 128, 40.0);
+        CHECK (finiteBounded (l, 1.0) && energyOf (l, 5 * 48000) > 1e-3);
+    }
+}
+
 // Prob, Cycle, Flam, Sub-Step, Nudge, Link and Humanize.
 void testPerformance()
 {
-    auto hits = [] (std::vector<std::pair<std::string, double>> values, int count, bool playing, int key = 37, uint64_t every = 12000) {
+    auto hits = [] (std::vector<std::pair<std::string, double>> values, int count, bool playing, int key = padKey (1), uint64_t every = 12000) {
         Instance i;
         auto base = solo (1);
         base.insert (base.end(), values.begin(), values.end());
@@ -883,7 +1051,7 @@ void testPerformance()
 
     // Cycle 2/2 at 120 bpm (a bar is 96000 frames): hits in the second bar of each pair only.
     {
-        const auto c = hits ({ { "RS Cycle", 2.0 } }, 16, true, 37, 24000); // four a bar, four bars
+        const auto c = hits ({ { "RS Cycle", 2.0 } }, 16, true, padKey (1), 24000); // four a bar, four bars
         const auto on = onsetsOf (c, 1e-4, 2000);
         CHECK (on.size() == 8);
         bool rightBars = true;
@@ -891,9 +1059,9 @@ void testPerformance()
             rightBars &= ((f / 96000) % 2) == 1;
         CHECK (rightBars);
         // Stopped, cycles do not apply: pads play.
-        CHECK (onsetsOf (hits ({ { "RS Cycle", 2.0 } }, 8, false, 37, 24000), 1e-4, 2000).size() == 8);
+        CHECK (onsetsOf (hits ({ { "RS Cycle", 2.0 } }, 8, false, padKey (1), 24000), 1e-4, 2000).size() == 8);
         // 1st Only: just the first bar after Play.
-        const auto first = onsetsOf (hits ({ { "RS Cycle", 18.0 } }, 16, true, 37, 24000), 1e-4, 2000);
+        const auto first = onsetsOf (hits ({ { "RS Cycle", 18.0 } }, 16, true, padKey (1), 24000), 1e-4, 2000);
         CHECK (first.size() == 4 && first.back() < 96000);
     }
     // Flam 20 ms: a grace hit on the note (0.45 of its velocity), the main one 960 frames later, louder (the claves:
@@ -904,11 +1072,11 @@ void testPerformance()
         values.push_back ({ "CL Flam", 20.0 });
         fl.setup (values);
         std::vector<float> f, r;
-        fl.play (24000, { { 600, 48, 0.75 } }, f, r, true);
+        fl.play (24000, { { 600, padKey (12), 0.75 } }, f, r, true);
         Instance g;
         g.setup (solo (12));
         std::vector<float> grace;
-        g.play (f.size(), { { 600, 48, (double) (0.75f * 0.45f) } }, grace, r, true);
+        g.play (f.size(), { { 600, padKey (12), (double) (0.75f * 0.45f) } }, grace, r, true);
         CHECK (onsetOf (f) == 600);
         std::vector<float> main (f.size());
         for (size_t k = 0; k < f.size(); ++k)
@@ -950,13 +1118,13 @@ void testPerformance()
             i.play (24000, notes, l, r);
             return l;
         };
-        const auto both = one ({ { "B2 Link", 1.0 } }, { { 100, 36 } });
-        const auto separate = one ({}, { { 100, 36 }, { 100, 51 } });
+        const auto both = one ({ { "B2 Link", 1.0 } }, { { 100, padKey (0) } });
+        const auto separate = one ({}, { { 100, padKey (0) }, { 100, padKey (15) } });
         double diff = 0.0;
         for (size_t k = 0; k < both.size(); ++k)
             diff = std::max (diff, (double) std::fabs (both[k] - separate[k]));
         CHECK_MSG (diff < 1e-6, "linked differs by %g", diff);
-        CHECK (energyOf (both) > energyOf (one ({}, { { 100, 36 } })) * 1.2);
+        CHECK (energyOf (both) > energyOf (one ({}, { { 100, padKey (0) } })) * 1.2);
     }
 }
 
@@ -986,8 +1154,9 @@ void testKeysAndMaps()
         i.play (24000, { { 0, 60, 0.75 } }, l, r);
         CHECK (peakOf (l) == 0.0); // no Keys voice: nothing
     }
-    // GM: 42 is the closed hat, 46 the open one, 35 the second kick; in Pads 42 is the high tom.
-    for (auto [key, voice, gm] : std::vector<std::tuple<int, int, bool>> { { 42, 7, true }, { 46, 8, true }, { 35, 15, true }, { 42, 6, false } })
+    // GM: 42 is the closed hat, 46 the open one, 35 the second kick; in Pads 42 is the crash (pad A07), 39 the closed
+    // hat (A04).
+    for (auto [key, voice, gm] : std::vector<std::tuple<int, int, bool>> { { 42, 7, true }, { 46, 8, true }, { 35, 15, true }, { 42, 9, false }, { 39, 7, false } })
     {
         Instance i;
         auto values = solo (voice);
@@ -1002,8 +1171,8 @@ void testKeysAndMaps()
         Instance a, b;
         a.setup (solo (2)), b.setup (solo (2));
         std::vector<float> la, ra, lb, rb;
-        a.render (12000, 128, la, ra, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.note (10, CLAP_EVENT_NOTE_ON, 38, 100.0 / 127.0); });
-        b.render (12000, 128, lb, rb, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.midi (10, 0x90, 38, 100); });
+        a.render (12000, 128, la, ra, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.note (10, CLAP_EVENT_NOTE_ON, padKey (2), 100.0 / 127.0); });
+        b.render (12000, 128, lb, rb, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.midi (10, 0x90, (uint8_t) padKey (2), 100); });
         CHECK (same (la, lb) && peakOf (la) > 0.05);
     }
 }
@@ -1017,7 +1186,7 @@ void testSideChain()
         values.insert (values.end(), { { "BD Level", -60.0 }, { "SC Source", 1.0 }, { "OH Duck", duck }, { "OH Decay", 1.0 }, { "OH Model", 1.0 } });
         i.setup (values);
         std::vector<float> l, r;
-        i.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 0.75 } }, l, r);
+        i.play (48000, { { 0, padKey (8), 0.75 }, { 12000, padKey (0), 0.75 } }, l, r);
         return l;
     };
     const auto plain = hat (0.0), ducked = hat (0.8);
@@ -1032,7 +1201,7 @@ void testSideChain()
         a.setup ({ { "BD Level", -60.0 } });
         b.setup ({ { "SC Source", 0.0 } });
         std::vector<float> l, r;
-        const std::vector<Note> notes = { { 0, 36, 0.9 }, { 12000, 38, 0.9 }, { 12000, 43, 0.9 } };
+        const std::vector<Note> notes = { { 0, padKey (0), 0.9 }, { 12000, padKey (2), 0.9 }, { 12000, padKey (7), 0.9 } };
         a.play (24000, notes, l, r);
         CHECK (peakOf (a.keyL, 0, 6000) > 0.1 && same (a.keyL, a.keyR));
         CHECK (peakOf (l, 0, 6000) < 1e-3); // muted in the mix, still keying
@@ -1057,7 +1226,7 @@ void testSideChain()
         values.insert (values.end(), { { "BD Level", -60.0 }, { "OH Decay", 1.0 }, { "Comp", 0.8 }, { "Comp Key", key }, { "Comp Attack", 0.0 } });
         i.setup (values);
         std::vector<float> l, r;
-        i.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 1.0 } }, l, r);
+        i.play (48000, { { 0, padKey (8), 0.75 }, { 12000, padKey (0), 1.0 } }, l, r);
         return l;
     };
     const auto mixKeyed = keyed (0.0), kickKeyed = keyed (1.0);
@@ -1069,7 +1238,7 @@ void testSideChain()
         values.insert (values.end(), { { "BD Level", -60.0 }, { "OH Decay", 1.0 }, { "Comp", 0.0 } });
         d.setup (values);
         std::vector<float> dl, dr;
-        d.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 1.0 } }, dl, dr);
+        d.play (48000, { { 0, padKey (8), 0.75 }, { 12000, padKey (0), 1.0 } }, dl, dr);
         double diff = 0.0;
         for (size_t k = 0; k < 11000; ++k)
             diff = std::max (diff, (double) std::fabs (dl[k] - kickKeyed[k]));
@@ -1086,7 +1255,7 @@ void testEffects()
         base.insert (base.end(), values.begin(), values.end());
         i.setup (base);
         std::vector<float> l, r;
-        i.play (96000, { { 0, 39, 0.75 } }, l, r, true);
+        i.play (96000, { { 0, padKey (3), 0.75 } }, l, r, true);
         return std::make_pair (l, r);
     };
     const auto dry = clap ({});
@@ -1148,7 +1317,7 @@ void testBlockSizes()
                           if (f >= at && f < at + n)
                           {
                               e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) (36 + (f / 6000) % 16), 0.8);
-                              e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, 43, 0.6);
+                              e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, padKey (7), 0.6);
                           }
                   });
         key = i.keyL;
@@ -1219,16 +1388,16 @@ void writeDemos (const std::string& folder)
             for (int s = 0; s < 16; ++s)
             {
                 const uint64_t f = (uint64_t) (bar * 16 + s) * step;
-                if (s % 4 == 0 || s == 14) notes.push_back ({ f, 36, s == 0 ? 1.0 : 0.85 });
-                if (s == 4 || s == 12) notes.push_back ({ f, 38, 0.9 });
-                if (s == 12 && bar == 1) notes.push_back ({ f, 39, 0.9 });
-                notes.push_back ({ f, s % 4 == 2 ? 44 : 43, s % 2 ? 0.55 : 0.8 });
-                if (s == 10) notes.push_back ({ f, 47, 0.7 });
-                if (bar == 1 && s >= 12) notes.push_back ({ f, 40 + (s - 12) % 3, 0.8 });
+                if (s % 4 == 0 || s == 14) notes.push_back ({ f, padKey (0), s == 0 ? 1.0 : 0.85 });
+                if (s == 4 || s == 12) notes.push_back ({ f, padKey (2), 0.9 });
+                if (s == 12 && bar == 1) notes.push_back ({ f, padKey (3), 0.9 });
+                notes.push_back ({ f, padKey (s % 4 == 2 ? 8 : 7), s % 2 ? 0.55 : 0.8 });
+                if (s == 10) notes.push_back ({ f, padKey (11), 0.7 });
+                if (bar == 1 && s >= 12) notes.push_back ({ f, padKey (4 + (s - 12) % 3), 0.8 });
                 if (std::strcmp (key, "808-bass") == 0 && s % 8 == 0) notes.push_back ({ f, s == 0 ? 60 : 63, 0.9 });
             }
-        notes.push_back ({ step * 32, 45, 0.9 });
-        notes.push_back ({ step * 32, 36, 1.0 });
+        notes.push_back ({ step * 32, padKey (9), 0.9 });
+        notes.push_back ({ step * 32, padKey (0), 1.0 });
         std::vector<float> l, r;
         i.play (step * 32 + 96000, notes, l, r, true);
         writeWav ((folder + "/demo-" + key + ".wav").c_str(), l, r, 48000);
@@ -1268,6 +1437,7 @@ int main (int argc, char** argv)
     testChoke();
     testModelSwitch();
     testGeneratorControls();
+    testEnds();
     testPerformance();
     testKeysAndMaps();
     testSideChain();
