@@ -24,7 +24,7 @@ $(OUT)/bake-screen: tools/bake-screen.cpp
 	@mkdir -p $(OUT)
 	$(CXX) -std=c++17 -O2 $(WARN) $< -lpng -o $@
 
-$(OUT)/screen-art.h: assets/acid-cast.png $(OUT)/bake-screen
+$(OUT)/screen-art.h: assets/foundry-panel.png $(OUT)/bake-screen
 	$(OUT)/bake-screen $< > $@.tmp && mv $@.tmp $@
 
 .PHONY: all test bench clean fingerprint-update sanitize

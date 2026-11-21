@@ -52,9 +52,9 @@ voice keeps its parameters.
 at its own pitch (pad bank B, notes 52-67, is -8 to +7 semitones; bank C goes on up); with GM, notes from 84 up, 96
 being its pitch. Set it to BD for an 808 bass line (the **808 Bass Keys** preset).
 
-## Acid Cast screen
+## X0X Drum Works screen
 
-In hdslaveOS, Foundry draws the Acid Cast panel on Edit and Stage. The sixteen pads light in playing order.
+In hdslaveOS, Foundry draws the X0X Drum Works panel on Edit and Stage. The sixteen pads light in playing order.
 A kick pushes the chrome face forward, a snare offsets its blue outline, and the metal voices flare the rays.
 The four lanes below show the last two seconds of strikes by velocity, including linked voices, flams and sub-steps.
 One lane follows the selected pad and the others follow recent voices.

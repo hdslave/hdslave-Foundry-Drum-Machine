@@ -1,4 +1,4 @@
-// Foundry's Acid Cast page. The indexed sheet holds the original print and four strike
+// Foundry's drum page. The indexed sheet holds the panel artwork and four strike
 // intensities for each family (drums, snares and metals). Everything that reads out is live.
 #pragma once
 #include "melodee_screen.h"
