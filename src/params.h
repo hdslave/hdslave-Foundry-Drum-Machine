@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.2.0"
+#define FOUNDRY_VERSION "0.3.0"
 #endif
 
 namespace foundry
@@ -96,33 +96,36 @@ struct VoiceSpec
     const char* name; // "Bass Drum": the pad's name (15 characters at most: Melodee's pad names)
     Type type;
     uint8_t model;        // the model it opens with
-    float baseHz;         // its pitch at Tune 0 (the 808 model's; the others scale it, engine.h)
+    float hz[modelCount]; // its pitch at Tune 0 in each model (the metal's: a multiplier of its oscillators)
     float decay[modelCount][2]; // Decay 0 and 100 %: the time to fall 60 dB, seconds, per model
     float level, pan, decayKnob;
     float slot[8]; // the slots' defaults
     uint8_t choke; // its choke group at first (0 none)
     int8_t gm[4];  // its General MIDI keys (Key Map: GM), -1 after the last
-    float aux;     // hats: the 808 style's high pass after the VCA (Hz)
+    float aux;     // hats: the 808 style's high pass after the VCA; cymbals: the 909 style's DAC low pass (Hz)
+    float knee;    // hats and cymbals: where the 808 and 606 styles' swing VCAs let go, a share of the envelope's peak
 };
 
 // clang-format off
 inline constexpr VoiceSpec voiceSpecs[voiceCount] = {
-    { "BD", "Bass Drum",   Type::kick,    m808,   49.5f, { { 0.10f, 3.7f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, 0.0f,  0.0f,  0.45f, { 0.35f, 0.5f, 0.2f, 0.35f, 0.0f }, 0, { 36, -1 }, 0.0f },
-    { "RS", "Rim Shot",    Type::rim,     m808,  455.0f, { { 0.010f, 0.20f }, { 0.012f, 0.25f }, { 0.008f, 0.15f } }, -6.0f, 0.1f, 0.35f, { 0.0f, 0.5f, 0.2f, 0.0f, 0.5f }, 0, { 37, -1 }, 0.0f },
-    { "SD", "Snare Drum",  Type::snare,   m909,  238.0f, { { 0.05f, 0.80f }, { 0.06f, 0.70f }, { 0.04f, 0.45f } }, -2.0f, 0.0f, 0.4f, { 0.0f, 0.55f, 0.4f, 0.0f, 0.0f, 0.25f, 0.3f, 0.0f }, 0, { 38, 40, -1 }, 0.0f },
-    { "CP", "Hand Clap",   Type::clap,    m808, 1000.0f, { { 0.08f, 1.50f }, { 0.07f, 1.20f }, { 0.05f, 0.80f } }, -3.0f, 0.0f, 0.4f, { 0.43f, 0.5f, 0.4f, 0.0f, 0.0f, 0.4f, 0.0f, 0.5f }, 0, { 39, -1 }, 0.0f },
-    { "LT", "Low Tom",     Type::tom,     m808,   90.0f, { { 0.10f, 2.00f }, { 0.12f, 2.50f }, { 0.06f, 1.20f } }, -3.0f, -0.25f, 0.45f, { 0.3f, 0.4f, 0.4f, 0.2f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 41, 43, -1 }, 0.0f },
-    { "MT", "Mid Tom",     Type::tom,     m808,  130.0f, { { 0.09f, 1.80f }, { 0.11f, 2.20f }, { 0.05f, 1.10f } }, -3.0f, 0.0f, 0.45f, { 0.0f, 0.45f, 0.35f, 0.2f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 45, 47, -1 }, 0.0f },
-    { "HT", "High Tom",    Type::tom,     m808,  180.0f, { { 0.08f, 1.60f }, { 0.10f, 2.00f }, { 0.05f, 1.00f } }, -3.0f, 0.25f, 0.45f, { 0.0f, 0.5f, 0.35f, 0.2f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 48, 50, -1 }, 0.0f },
-    { "CH", "Closed Hat",  Type::hat,     m808, 1.0f, { { 0.02f, 0.40f }, { 0.02f, 0.35f }, { 0.015f, 0.30f } }, -6.0f, 0.15f, 0.35f, { 0.0f, 0.35f, 0.0f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 1, { 42, 44, -1 }, 10000.0f },
-    { "OH", "Open Hat",    Type::hat,     m808, 1.0f, { { 0.12f, 3.00f }, { 0.12f, 2.50f }, { 0.08f, 1.80f } }, -7.0f, 0.15f, 0.55f, { 0.0f, 0.35f, 0.0f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 1, { 46, -1 }, 7800.0f },
-    { "CY", "Crash",       Type::cymbal,  m808, 1.0f, { { 0.30f, 6.00f }, { 0.30f, 5.00f }, { 0.20f, 3.00f } }, -8.0f, -0.3f, 0.5f, { 0.0f, 0.0f, 0.5f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 0, { 49, 52, 55, 57 }, 0.0f },
-    { "RD", "Ride",        Type::cymbal,  m909, 1.3f, { { 0.40f, 8.00f }, { 0.40f, 7.00f }, { 0.25f, 4.00f } }, -9.0f, 0.3f, 0.5f, { 0.3f, 0.5f, 0.6f, 1.0f, 0.3f, 0.0f, 0.0f, 0.0f }, 0, { 51, 53, 59, -1 }, 0.0f },
-    { "CB", "Cowbell",     Type::cowbell, m808,  540.0f, { { 0.08f, 1.20f }, { 0.08f, 1.20f }, { 0.05f, 0.70f } }, -8.0f, -0.2f, 0.3f, { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f }, 0, { 56, -1 }, 0.0f },
-    { "CL", "Claves",      Type::clave,   m808, 2500.0f, { { 0.02f, 0.25f }, { 0.02f, 0.25f }, { 0.015f, 0.18f } }, -8.0f, 0.35f, 0.35f, { 0.5f, 0.0f }, 0, { 75, 76, 77, -1 }, 0.0f },
-    { "MA", "Maracas",     Type::maraca,  m808, 5000.0f, { { 0.02f, 0.30f }, { 0.02f, 0.30f }, { 0.015f, 0.20f } }, -10.0f, -0.35f, 0.35f, { 0.3f, 0.0f }, 0, { 70, 69, -1 }, 0.0f },
-    { "CG", "Conga",       Type::tom,     m808,  250.0f, { { 0.05f, 1.00f }, { 0.06f, 1.20f }, { 0.04f, 0.60f } }, -5.0f, -0.4f, 0.3f, { 0.0f, 0.5f, 0.2f, 0.15f, 0.3f, 0.0f, -1.0f, 0.0f }, 0, { 62, 63, 64, -1 }, 0.0f },
-    { "B2", "Bass Drum 2", Type::kick,    m909,   49.5f, { { 0.10f, 3.7f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, -3.0f, 0.0f, 0.4f, { 0.5f, 0.6f, 0.45f, 0.35f, 0.0f }, 0, { 35, -1 }, 0.0f },
+    // Pitches: the 808's and 606's measured from the machines (kick, snare, toms, congas, rim, claves, cowbell), the 909's
+    // where measured (kick, snare body, rim) and estimated elsewhere; see the README.
+    { "BD", "Bass Drum",   Type::kick,    m808, {   53.0f,   53.0f,   62.0f }, { { 0.10f, 5.0f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, 0.0f,  0.0f,  0.45f, { 0.35f, 0.5f, 0.2f, 0.35f, 0.0f }, 0, { 36, -1 }, 0.0f, 0.0f },
+    { "RS", "Rim Shot",    Type::rim,     m808, {  455.0f,  220.0f, 1100.0f }, { { 0.010f, 0.20f }, { 0.012f, 0.25f }, { 0.008f, 0.15f } }, -6.0f, 0.1f, 0.35f, { 0.0f, 0.5f, 0.2f, 0.0f, 0.5f }, 0, { 37, -1 }, 0.0f, 0.0f },
+    { "SD", "Snare Drum",  Type::snare,   m909, {  175.0f,  230.0f,  205.0f }, { { 0.06f, 1.00f }, { 0.06f, 0.70f }, { 0.05f, 0.60f } }, -2.0f, 0.0f, 0.4f, { 0.0f, 0.55f, 0.4f, 0.0f, 0.0f, 0.25f, 0.3f, 0.0f }, 0, { 38, 40, -1 }, 0.0f, 0.0f },
+    { "CP", "Hand Clap",   Type::clap,    m808, { 1100.0f, 1200.0f, 1400.0f }, { { 0.08f, 1.50f }, { 0.07f, 1.20f }, { 0.05f, 0.80f } }, -3.0f, 0.0f, 0.52f, { 0.43f, 0.5f, 0.4f, 0.0f, 0.0f, 0.4f, 0.0f, 0.5f }, 0, { 39, -1 }, 0.0f, 0.0f },
+    { "LT", "Low Tom",     Type::tom,     m808, {   90.0f,  100.0f,  145.0f }, { { 0.10f, 2.00f }, { 0.12f, 2.50f }, { 0.06f, 1.20f } }, -3.0f, -0.25f, 0.45f, { 0.1f, 0.4f, 0.4f, 0.2f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 41, 43, -1 }, 0.0f, 0.0f },
+    { "MT", "Mid Tom",     Type::tom,     m808, {  132.0f,  140.0f,  175.0f }, { { 0.09f, 1.80f }, { 0.11f, 2.20f }, { 0.05f, 1.10f } }, -3.0f, 0.0f, 0.45f, { 0.0f, 0.45f, 0.35f, 0.12f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 45, 47, -1 }, 0.0f, 0.0f },
+    { "HT", "High Tom",    Type::tom,     m808, {  185.0f,  200.0f,  205.0f }, { { 0.08f, 1.60f }, { 0.10f, 2.00f }, { 0.05f, 1.00f } }, -3.0f, 0.25f, 0.45f, { 0.0f, 0.5f, 0.35f, 0.05f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 48, 50, -1 }, 0.0f, 0.0f },
+    { "CH", "Closed Hat",  Type::hat,     m808, { 1.0f, 1.0f, 1.0f }, { { 0.40f, 4.00f }, { 0.06f, 0.55f }, { 0.04f, 0.40f } }, -6.0f, 0.15f, 0.48f, { 0.0f, 0.35f, 0.0f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 1, { 42, 44, -1 }, 6500.0f, 0.6f },
+    { "OH", "Open Hat",    Type::hat,     m808, { 1.0f, 1.0f, 1.0f }, { { 0.60f, 8.00f }, { 0.12f, 2.50f }, { 0.10f, 4.00f } }, -7.0f, 0.15f, 0.72f, { 0.0f, 0.35f, 0.0f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 1, { 46, -1 }, 5500.0f, 0.62f },
+    { "CY", "Crash",       Type::cymbal,  m808, { 1.0f, 1.0f, 1.0f }, { { 0.60f, 10.0f }, { 0.60f, 8.00f }, { 0.20f, 3.00f } }, -8.0f, -0.3f, 0.5f, { 0.0f, 0.0f, 0.5f, 1.0f, 0.4286f, 0.0f, 0.0f, 0.0f }, 0, { 49, 52, 55, 57 }, 8500.0f, 0.03f },
+    { "RD", "Ride",        Type::cymbal,  m909, { 1.3f, 1.3f, 1.3f }, { { 0.60f, 10.0f }, { 0.40f, 5.00f }, { 0.25f, 4.00f } }, -9.0f, 0.3f, 0.5f, { 0.3f, 0.5f, 0.6f, 1.0f, 0.3f, 0.0f, 0.0f, 0.0f }, 0, { 51, 53, 59, -1 }, 15000.0f, 0.03f },
+    { "CB", "Cowbell",     Type::cowbell, m808, {  540.0f,  587.0f,  690.0f }, { { 0.20f, 2.50f }, { 0.20f, 2.50f }, { 0.10f, 1.20f } }, -8.0f, -0.2f, 0.55f, { 0.0f, 0.5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f }, 0, { 56, -1 }, 0.0f, 0.0f },
+    { "CL", "Claves",      Type::clave,   m808, { 2450.0f, 1800.0f, 3300.0f }, { { 0.02f, 0.25f }, { 0.02f, 0.25f }, { 0.015f, 0.18f } }, -8.0f, 0.35f, 0.35f, { 0.5f, 0.0f }, 0, { 75, 76, 77, -1 }, 0.0f, 0.0f },
+    { "MA", "Maracas",     Type::maraca,  m808, { 7000.0f, 9000.0f, 10000.0f }, { { 0.02f, 0.30f }, { 0.02f, 0.30f }, { 0.015f, 0.20f } }, -10.0f, -0.35f, 0.2f, { 0.6f, 0.0f }, 0, { 70, 69, -1 }, 0.0f, 0.0f },
+    { "CG", "Conga",       Type::tom,     m808, {  215.0f,  250.0f,  300.0f }, { { 0.05f, 1.00f }, { 0.06f, 1.20f }, { 0.04f, 0.60f } }, -5.0f, -0.4f, 0.3f, { 0.0f, 0.5f, 0.2f, 0.05f, 0.3f, 0.0f, -1.0f, 0.0f }, 0, { 62, 63, 64, -1 }, 0.0f, 0.0f },
+    { "B2", "Bass Drum 2", Type::kick,    m909, {   53.0f,   53.0f,   62.0f }, { { 0.10f, 5.0f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, -3.0f, 0.0f, 0.4f, { 0.5f, 0.6f, 0.45f, 0.35f, 0.0f }, 0, { 35, -1 }, 0.0f, 0.0f },
 };
 // clang-format on
 

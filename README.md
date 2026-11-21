@@ -42,52 +42,64 @@ being its pitch. Set it to BD for an 808 bass line (the **808 Bass Keys** preset
 
 ## The models
 
-Each model follows what is documented of that machine's circuits (see [Sources](#sources)), simplified to what is
-heard and what the MPC's core affords. Voices a machine never had (a 909 or 606 cowbell, a 606 clap or rim) are new
-ones in that model's character.
+Each model follows what is documented of that machine's circuits, and then was fitted to recordings of the machines
+themselves: the lengths and levels of the kicks' and toms' first half-cycles, and the spectra and decay points of the
+snares, hats, cymbals, claps, cowbell and maracas (see [Sources](#sources)). They are simplified to what is heard and
+what the MPC's core affords. Voices a machine never had (a 909 or 606 cowbell, a 606 clap or rim) are new ones in
+that model's character.
 
-**808 style.** Bridged-T resonators struck by the trigger: a second hit adds to a ring still going, so fast repeats
-are never identical.
+**808 style.** Bridged-T band passes struck by the trigger, answering in their cosine phase: at full swing the
+moment they are struck (the snap), and a second hit adds to a ring still going.
 
-- **Kick.** Its centre is held raised for the first milliseconds (about twice, for about 5 ms, as the attack
-  envelope's transistor does), then it rings on at 49.5 Hz. The trigger pulse's fall 1 ms in strikes it again, partly
-  by a fixed diode drop, so soft and hard hits differ in shape. The pitch sighs: on each negative swing the leakage
-  raises the centre by the swing's size, so a loud hit starts sharp and settles (louder sighs more). Tone is the pot's
-  low pass over the whole output.
-- **Snare.** Two networks, the fundamental at 238 Hz and its harmonic an octave up, Tone their balance; Snappy is
-  noise through its own envelope and a high pass.
-- **Toms and conga.** The pitch rides on the ring, as the 808's diodes make it: raised while the ring is big, falling
-  as it dies. Only the low tom gets the pink noise (Color) by default, as on the 808.
+- **Kick.** The centre glides down from about 3.5 times its pitch to 53 Hz over about 4 ms (the attack envelope's
+  transistor and retrigger pulse), the first cycles louder. On each negative swing the leakage raises the centre by
+  the swing's size and that half swings wider (the sigh), so a loud hit starts sharp and settles. Against the
+  recordings, the first eight half-cycles' lengths match within a few per cent: 1.6, 4.1, 7.4, 8.3, 9.4 ms against
+  1.7, 3.7, 7.0, 8.2, 9.4. Tone is the pot's low pass over the whole output.
+- **Snare.** Two networks at 175 and 330 Hz, Tone their balance. Snappy is white noise through its own envelope and
+  a high pass (its peak near 4 kHz); at full Snappy it rivals the body, as recorded.
+- **Toms and conga.** One network each (about 90, 132 and 185 Hz, the conga 215 Hz), whose pitch rides on the ring,
+  as the 808's diodes make it: a few per cent sharp while the ring is big, settling as it dies. Only the low tom has
+  any pink noise (Color), and little.
 - **Rim shot.** Networks at 455 and 1667 Hz through a short, saturating swing-type VCA, with a little band-passed
-  noise. **Claves:** one high-Q network at 2.5 kHz.
-- **Clap.** Noise through a band pass near 1 kHz into two VCAs: the sawtooth envelope's bursts (three short, the last
-  longer) and the reverb's long envelope.
-- **Cowbell.** The squares at 540 and 800 Hz through a band pass, with an abrupt first fall, then the long one.
-- **Hats.** The six square oscillators (205.3, 304.4, 369.6, 522.7, 540, 800 Hz) into the 7.1 kHz band, clipped by a
-  swing-type VCA against its envelope (the sizzle), high passed (the open hat lower than the closed), then the output
-  stage's differentiator.
-- **Cymbal.** Three bands as on the 808: the 3.44 kHz band through its VCA (Decay) and high pass; the 7.1 kHz band
-  through two VCAs, a middle one at half the decay and the highest short, through a third-order high pass ringing
-  near 10.5 kHz. Tone mostly sets the highest band's share.
+  noise. **Claves:** one high-Q network at 2.45 kHz.
+- **Clap.** Noise through a broad band near 1.1 kHz into two VCAs: the sawtooth envelope's bursts (three short, the
+  last longer) and the reverb's envelope (about 0.37 s).
+- **Cowbell.** The 800 Hz square over the 540 Hz one (about 18 dB under) through a band near 850 Hz, with the gates'
+  intermodulation. An abrupt first fall, then a long quiet second stage (about 20 dB down, Decay).
+- **Hats.** The six square oscillators (205.3, 304.4, 369.6, 522.7, 540, 800 Hz, free-running, mixed unequally) into
+  the band near 7.6 kHz, then a swing-type VCA. Its clipping is the sizzle. Its diode lets go below a share of the
+  envelope, so the closed hat holds then bends down to nothing at about 90 ms, and the open hat holds then drops.
+  Then a high pass and the output's differentiator: the spectrum peaks at 8 kHz, as recorded.
+- **Cymbal.** Three bands as on the 808: a bright, short top band (a third-order high pass ringing near 10.5 kHz)
+  over a long tail from the 7.1 kHz band and a little of the 3.44 kHz band, through swing VCAs, differentiated.
+  Tone sets the top band's share.
+- **Maracas.** Noise high passed near 7 kHz (rolling off over 12 kHz), swelling over about 11 ms, then falling fast.
 
 **909 style.** Oscillators reset by the hit, through shapers and envelopes.
 
-- **Kick.** A triangle VCO shaped toward a sine (Excite overdrives the shaper toward a square). Its pitch is swept
-  down linearly by a slow envelope (Body Depth, Body Decay: the 909's TUNE). Through its decay VCA, plus the attack: a
-  short pulse and a burst of noise through a low pass.
-- **Snare.** Two VCOs near 180 and 330 Hz, shaped, each through its own envelope (the upper shorter), swept by Pitch
-  Env. Its noise goes through a low pass (Tone) into a high-passed band (Snappy) and a shorter unfiltered share.
+- **Kick.** A triangle VCO shaped toward a sine, its negative half fuller than its positive, as recorded (Excite
+  overdrives the shaper). Its pitch is swept down from about six times its pitch: on the machine Tune sets the sweep's
+  time, 5 to 20 ms, here Body Decay. Settles at 53 Hz. The VCA's envelope holds before it falls. The attack is a
+  pulse that merges with the first half-cycle, plus a burst of filtered noise.
+- **Snare.** Two shaped VCOs near 230 and 380 Hz, each through its own envelope. Their noise goes through a low pass
+  (Tone) into a high-passed band (Snappy) and an unfiltered share. It swells in over its first milliseconds (the
+  recording's attack is the body) and rings on bright for about half a second.
 - **Toms.** VCOs swept down by a pitch envelope.
-- **Hats and cymbals.** The ROM voices' path: the metal and noise, falling over the sample's own length, read as
-  6-bit words at a 30 kHz clock that Tune moves (Error takes bits away), then the VCA (Decay) and a low pass. The
-  909 plays recorded samples here; Foundry synthesizes the source.
+- **Hats and cymbals.** The ROM voices' path. The metal and plenty of noise, high passed (the cymbals keep a low-mid
+  body near 450 Hz, as the recorded crash has), falling over the sample's own length. Then read as 6-bit words at a
+  30 kHz clock that Tune moves (Error takes bits away), the VCA (Decay) and the DAC's low pass (the ride's brighter).
+  The 909 plays recorded samples here; Foundry synthesizes the source.
 
 **606 style.**
 
-- **Kick.** Two networks: the body near 60 Hz and a higher, short one for the click (Attack its level).
-- **Snare.** One main network, a weak second, louder snappy noise, the whole high passed.
+- **Kick.** Two networks: the body at 62 Hz with a lighter glide, and a higher, short one for the click (Attack its
+  level).
+- **Snare.** One main network near 205 Hz, a weak second, strong snappy noise, the whole high passed.
+- **Toms.** Higher than the 808's (about 145 and 205 Hz), and the low tom's pitch falls further, about a quarter, as
+  recorded.
 - **Hats and cymbal.** Its own six oscillators (245, 306, 365, 415, 437, 619 Hz) through a band pass and a high pass
-  in parallel, a swing VCA, then a high pass.
+  in parallel, decaying plainly (no gate: the recorded 606 hat falls steadily), then a high pass.
 
 ## Controls
 
@@ -141,7 +153,7 @@ The TR-1000 names where it has the control; *new* where it does not.
 
 | Type | Controls |
 |---|---|
-| Kick | Attack (808: how far the attack raises the centre; 909: the click's level, its ATTACK; 606: the click network's level), Tone (808: the TONE pot, a low pass over the output; 909 and 606: the click's brightness), Body Depth (808: the sigh's depth; 909: the sweep's depth, its TUNE, 9X P.AMOUNT; 8X BODY DEPTH), Body Decay (808: the attack window, 1 – 13 ms; 909: the sweep's fall, 9X P.DECAY; 606: the click's length), Excite (the 8X EXCITE: odd harmonics; on the 909 it overdrives the shaper) |
+| Kick | Attack (808: how far the attack raises the centre; 909: the click's level, its ATTACK; 606: the click network's level), Tone (808: the TONE pot, a low pass over the output; 909 and 606: the click's brightness), Body Depth (808: the sigh's depth; 909: the sweep's depth, its TUNE, 9X P.AMOUNT; 8X BODY DEPTH), Body Decay (808: the glide's time, 1 – 10 ms; 909: the sweep's time, 4 – 34 ms, the machine's TUNE, 9X P.DECAY; 606: the glide and the click's length), Excite (the 8X EXCITE: odd harmonics; on the 909 it overdrives the shaper) |
 | Snare | Tone (808: the fundamental/harmonic balance; 909: the noise's low pass), Snappy, Snappy Decay, Detune, Osc Mix, Pitch Env, Pitch Decay, Freq Mod |
 | Tom, Conga | Color, Color Tone, Color Decay, Pitch Env, Pitch Decay (*new* on toms), Detune, Osc Mix, Shape |
 | Rim | Tone, Body, Noise, Freq Mod, Click (*new*) |
@@ -151,9 +163,9 @@ The TR-1000 names where it has the control; *new* where it does not.
 | Cowbell | Detune, Osc Mix, XMod, Ratio, Noise, Shape, Unison (±12 st, 0 off), Tone (*new*) |
 | Claves, Maracas | Attack, Tone (*new*) |
 
-Decay (each voice's) runs over that model's range: for example the 808 kick 0.1 – 3.7 s to fall 60 dB (the bridged-T's
-Q from about 2.3 to 84), the closed hat 20 – 400 ms (about 60 ms at the default), the open hat 0.12 – 3 s (about
-700 ms), the crash 0.3 – 6 s.
+Decay (each voice's) runs over that model's range: for example the 808 kick 0.1 – 5 s to fall 60 dB (the bridged-T's
+Q from about 2.3 to 84). The 808 hats' Decay sets the envelope their VCA lets go of: the closed hat lasts about 90 ms
+at the default, the open hat about 300 ms.
 
 ### The effects
 
@@ -222,41 +234,46 @@ control.
 
 ## Sources
 
-The models were built from these. Figures come from them where they give them; the rest are estimates.
+The models were built from the documents below, then fitted to multisampled recordings of a TR-606, a TR-808 and a
+TR-909. What was measured:
+
+- **Kicks and toms:** their first half-cycles' lengths and levels, which give the pitch glides, the sighs and the
+  asymmetries.
+- **Snares, hats, cymbals, claps, cowbell and maracas:** third-octave spectra early and late, and the times to fall
+  6, 12, 20, 30 and 40 dB.
+
+Where a recording and a document disagree, the recording won: the 808 snare is at 175/330 Hz, as later 808s are after
+Roland's capacitor change, not at the 1981 chart's 238/476 Hz.
 
 - K. J. Werner, J. S. Abel, J. O. Smith III: *A Physically-Informed, Circuit-Bendable, Digital Model of the Roland
-  TR-808 Bass Drum Circuit*, DAFx-14. Gives the 49.5 Hz centre, the 1 ms trigger and the shaper's two edges, the
-  raised centre for the first few milliseconds, the amplitude-driven pitch sigh, the Tone low pass, and the Decay
-  feedback.
+  TR-808 Bass Drum Circuit*, DAFx-14. Gives the bridged-T and its Decay feedback, the 1 ms trigger, the raised
+  centre for the first milliseconds, the amplitude-driven sigh on the negative swing, and the Tone low pass.
 - K. J. Werner, J. S. Abel, J. O. Smith: *The TR-808 Cymbal: a Physically-Informed, Circuit-Bendable, Digital
-  Model*, ICMC-SMC 2014. Gives the six oscillator frequencies, the 3.44 and 7.1 kHz bands, the three bands and their
-  envelopes, the swing-type VCAs' clipping, the high passes (one resonant near 10.5 kHz), the Tone stage and the
-  differentiating output.
-- Roland TR-808 service notes (circuit description, 1981):
+  Model*, ICMC-SMC 2014. Gives the six oscillators, the 3.44 and 7.1 kHz bands, the three bands and their
+  envelopes, the swing-type VCAs' clipping and diode, the high passes, the Tone stage, and the differentiating
+  output.
+- Roland TR-808 service notes (circuit description and design changes, 1981):
   - the accent's 4–14 V trigger;
-  - the kick's doubled frequency for 4 ms on accent and its retrigger pulse;
-  - the snare's fundamental/harmonic networks and its Tone and Snappy;
+  - the kick's doubled frequency for 4 ms;
+  - the snare's two networks, its Tone and Snappy, and the later capacitor values;
   - the toms' diode pitch fall, and pink noise on the low tom only;
-  - the clap's two VCAs and sawtooth envelope;
+  - the clap's two VCAs;
   - the cowbell's RC two-stage decay;
-  - the hats sharing the cymbal's upper band, and the closed hat choking the open.
-- The 808 snare's 238/476 Hz and rim shot's 455/1667 Hz from Roland's frequency chart, as reported by others.
-- The 808 kick's pitch in measured samples: a median of 49.5 Hz (arXiv 2502.07524).
+  - the hats sharing the cymbal's upper band.
+- The 808 kick's pitch in measured samples, a median of 49.5 Hz (arXiv 2502.07524). The recordings used here sit
+  at 53 Hz; 808s differ by their parts' tolerances.
 - Gordon Reid, *Synth Secrets* (Sound On Sound, 2002), on bass drums, snares, cymbals and cowbells: the 909 kick
   and snare block diagrams, the 909 cymbals' 30 kHz ROM clock.
-- Electric Druid on the Boss DR-110, a close 606 relative: its metal bands (3.45 and 7.12 kHz, Q 6) and decay
-  times.
+- Electric Druid on the Boss DR-110, a close 606 relative: its metal bands and decay times.
 - The TR-606's six hat oscillator tunings and its two-network kick, as published by others.
 
-Estimates, not documented figures:
+Still estimates:
 
-- the 808 tom and conga pitches (90, 130, 180 and 250 Hz);
-- the 808 hats' high passes (7.8 kHz open, 10 kHz closed);
-- the snare noise filters;
-- all of the 909's frequencies;
-- the 909 style's metal oscillators (the 909 plays samples);
-- the swing VCAs' drive;
-- the 606's snare and tom details.
+- the 909 toms' pitches;
+- the 909 style's metal oscillators (the 909 plays samples; its source here is synthesized and only its spectrum
+  and decay were matched);
+- the swing VCAs' drive and where their diodes let go (fitted to the decay points, not measured from the circuit);
+- the 606 style's mid tom and conga (the 606 has neither).
 
 ## Cost
 
@@ -264,12 +281,13 @@ Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 627,000 | 13 % |
-| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 137,000 | 2.9 % |
+| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 626,000 | 13 % |
+| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 146,000 | 3.0 % |
 | Stopped | about 3,800 | 0.08 % |
 
 A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. The
-knobs that move between hits are worked out every 16 samples. The real share on the MPC depends on how many
+knobs that move between hits are worked out every 16 samples; the resonators that retune every sample (the kick's
+glide and sigh, the toms' diodes) use a short Taylor series instead of full sines. The real share on the MPC depends on how many
 instructions the A55 retires a cycle on this code; Melodee's plug-in load figure shows it.
 
 ## Build and test
@@ -288,8 +306,8 @@ The tests load the plug-in through the CLAP API and check:
 - every parameter's range, text both ways and default, and each voice's block starting a row;
 - state save and load (and a state from another version); the presets as preset discovery lists them, each playing;
 - every voice in every model sounding, starting on its frame, bounded and ending;
-- the documented character: the 808 kick's short first lobe, its sigh (louder sighs more) and its settled 49.5 Hz;
-  the 909 kick's sweep; the 808 snare's 238/476 Hz and rim shot's 455/1667 Hz; the 808 tom's falling pitch; the 808
+- the recorded character: the 808 kick's short first lobe, its sigh (louder sighs more) and its settled 53 Hz;
+  the 909 kick's sweep; the 808 snare's 175/331 Hz and rim shot's 455/1667 Hz; the 808 tom's falling pitch; the 808
   hats' energy above 6 kHz; the clap's four bursts 9 ms apart; the 909 metal's held words;
 - velocity, accent, choke groups and the host's choke;
 - Prob (the same twice), Cycle, 1st Only, Flam, Sub-Step, Nudge, Humanize, Link;

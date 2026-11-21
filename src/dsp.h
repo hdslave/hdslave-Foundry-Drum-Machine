@@ -135,6 +135,14 @@ struct Resonator
 
     void tune (float cycles, float r_) { r = r_, c = r * cos2pi (cycles), s = r * sin2pi (cycles); }
     void tune (float cycles) { c = r * cos2pi (cycles), s = r * sin2pi (cycles); }
+    // The same for a low pitch (under about 1 kHz at 48 kHz: an angle under 0.13 a sample), by Taylor series to 1e-8:
+    // a third of tune's cost, for the voices retuned every sample (the kick's glide and sigh, the toms' diodes).
+    void tuneLow (float cycles)
+    {
+        const float w = 2.0f * pi * cycles, w2 = w * w;
+        c = r * (1.0f - w2 * (0.5f - w2 * (1.0f / 24.0f)));
+        s = r * w * (1.0f - w2 * (1.0f / 6.0f) * (1.0f - w2 * (1.0f / 20.0f)));
+    }
     void strike (float x) { re += x; }
     float run()
     {
@@ -142,6 +150,16 @@ struct Resonator
         im = s * re + c * im;
         re = nr;
         return im;
+    }
+    // The band pass's answer, as a bridged-T gives it: the cosine phase, at its peak the moment it is struck (the
+    // attack's snap), then rotated on.
+    float ring()
+    {
+        const float y = re;
+        const float nr = c * re - s * im;
+        im = s * re + c * im;
+        re = nr;
+        return y;
     }
     float size() const { return std::fabs (re) + std::fabs (im); }
     void clear() { re = im = 0.0f; }

@@ -38,20 +38,6 @@ struct Shared
     float duck = 0.0f;     // the side chain's envelope, 0..1
 };
 
-// Each type's pitch in each model, as a multiple of the voice's 808 pitch (VoiceSpec::baseHz).
-inline constexpr float modelPitch[][modelCount] = {
-    { 1.0f, 1.1f, 1.21f },   // kick: 49.5, 54, 60 Hz
-    { 1.0f, 0.92f, 2.42f },  // rim: 455 (and 1667), 420, 1100 Hz
-    { 1.0f, 0.756f, 1.09f }, // snare: 238 (and 476), 180 (and 330), 260 Hz
-    { 1.0f, 1.15f, 1.4f },   // clap: its noise band at 1, 1.15 and 1.4 kHz
-    { 1.0f, 1.1f, 1.2f },    // tom
-    { 1.0f, 1.0f, 1.0f },    // hat (its model's own oscillators)
-    { 1.0f, 1.0f, 1.0f },    // cymbal
-    { 1.0f, 1.087f, 1.28f }, // cowbell
-    { 1.0f, 0.72f, 1.32f },  // clave
-    { 1.0f, 1.4f, 1.6f },    // maraca (its high pass)
-};
-
 // The metal: six square oscillators. The 808's are its six (its cowbell's two among them) and the 606's its six;
 // the 909 style's are a new, denser set (the 909 itself plays samples).
 inline constexpr float metalHz[modelCount][6] = {
@@ -59,11 +45,13 @@ inline constexpr float metalHz[modelCount][6] = {
     { 263.0f, 400.0f, 421.0f, 474.0f, 587.0f, 845.0f },
     { 245.0f, 306.0f, 365.0f, 415.0f, 437.0f, 619.0f },
 };
-inline constexpr float metalNoise[] = { 0.0f, 0.3f, 0.15f }; // noise each model adds to its metal
+// The six's mixing weights: unequal, as the 808's dividers are, so their sum is never exactly nothing.
+inline constexpr float metalWeight[6] = { 1.0f, 0.9f, 0.95f, 0.85f, 1.05f, 0.8f };
+inline constexpr float metalNoise[] = { 0.0f, 0.5f, 0.15f }; // noise each model adds to its metal (the 909's samples are noisy)
 // The swing-type VCAs' clipping: how hard the band-passed metal drives them.
 inline constexpr float swingDrive[] = { 5.0f, 1.0f, 3.5f };
 // Output levels by model, so the kit sits balanced at its default levels (set from the level table the tests print).
-inline constexpr float hatGain[] = { 3.0f, 1.3f, 2.3f }, cymGain[] = { 1.45f, 1.0f, 1.65f }, clapGain[] = { 3.6f, 2.7f, 2.7f };
+inline constexpr float hatGain[] = { 1.5f, 0.9f, 9.0f }, cymGain[] = { 1.45f, 1.0f, 7.5f }, clapGain[] = { 2.4f, 2.0f, 2.0f };
 
 // The 909 style's VCO: a triangle (from its phase, rising from 0) through a shaper toward a sine; `drive` past ~1.7
 // pushes it toward a square.
@@ -140,6 +128,8 @@ struct Voice
         spec = &voiceSpecs[i];
         type = spec->type;
         noise.s = 0x9e3779b9u + 0x85ebca6bu * (uint32_t) (i + 1);
+        for (int k = 0; k < 6; ++k) // the oscillators run free: they never start together
+            ph[k] = hash01 ((uint64_t) (i * 8 + k) + 77u);
     }
 
     void clearState()
@@ -252,7 +242,7 @@ struct Voice
         lfoPitch = lfoTarget() == lfoTune ? exp2Fast (lfo) : 1.0f;
         const float decayMul = lfoTarget() == lfoDecay ? exp2Fast (1.5f * lfo) : 1.0f;
         const float semis = p[V::tune] + sh.kitTune + transpose;
-        hz = spec->baseHz * modelPitch[(int) type][model] * exp2Fast (semis * (1.0f / 12.0f));
+        hz = spec->hz[model] * exp2Fast (semis * (1.0f / 12.0f));
         const float decay = decaySeconds (decayMul) * sh.kitDecay;
         switch (type)
         {
@@ -331,7 +321,7 @@ struct Voice
             case Type::rim:
                 res[0].tune (c);
                 res[1].tune (c * ratio);
-                res[2].tune (c * 2.4f);
+                res[2].tune (c * 4.5f);
                 break;
             case Type::clap:
                 f[0].setHz (hz * lfoPitch * clapShift, f[0].k, rate);
@@ -341,7 +331,7 @@ struct Voice
             case Type::cymbal:
                 for (int k = 0; k < 6; ++k)
                     dt[k] = metalBase[k] * c;
-                clockInc = 30000.0f * hz * lfoPitch / spec->baseHz * invRate;
+                clockInc = 30000.0f * hz * lfoPitch / spec->hz[model] * invRate;
                 break;
             case Type::cowbell: dt[0] = c, dt[1] = c * ratio, dt[2] = c * x[6], dt[3] = c * x[5]; break;
             case Type::clave:
@@ -360,53 +350,56 @@ struct Voice
     float metalBase[6] {}; // the metal oscillators' frequencies over the voice's pitch
 
     // --- Kick -----------------------------------------------------------------------------------------------------
-    // 808: the bridged-T resonator struck by the trigger. For the attack window (Body Decay: 5 ms at the default)
-    // its centre sits raised (Attack: about twice at the default) as the envelope generator's transistor holds it,
-    // then it rings on at 49.5 Hz, the change phase-continuous; the trigger pulse's fall 1 ms in strikes it again,
-    // partly by a fixed diode drop, so soft and hard hits differ in shape. Its pitch sighs: on the negative swing the
-    // leakage raises the centre by the swing's size (Body Depth), so a loud hit starts sharp and settles. Tone is the
-    // pot's low pass over the whole output; the op-amp's rails round a very hot one.
-    // 909: a triangle VCO reset by the hit, shaped toward a sine (Excite drives the shaper toward a square), its
-    // pitch swept down linearly from Body Depth over Body Decay, through the decay VCA, plus the attack: a short pulse
-    // and a burst of noise through a low pass (Tone).
-    // 606: two networks: the body and a higher, short one for the click (Attack its level, Body Decay its length).
+    // 808: the bridged-T struck by the trigger, answering in its band pass's cosine phase (at its peak the moment it
+    // is struck: the snap), its centre gliding down from raised (Attack: 3.5 times at the default) to 53 Hz over a
+    // few milliseconds (Body Decay: 4 ms), the first cycles louder (the attack's boost), as the attack envelope's
+    // transistor and the retrigger pulse make it. Its pitch sighs: on the negative swing the leakage raises the centre
+    // by the swing's size (Body Depth), and that half swings wider. Fitted to recordings of the machine: the lobes'
+    // lengths and levels match within a few per cent. Tone is the pot's low pass; the op-amp's rails round a hot hit.
+    // 909: a triangle VCO reset by the hit, shaped toward a sine, its negative half fuller than its positive (as the
+    // machine's), swept down from about six times its pitch (Body Depth) over Body Decay (Tune, on the machine: 5 to
+    // 20 ms), through a VCA whose envelope holds before it falls, plus the attack: a short pulse and filtered noise.
+    // 606: the same struck network at 62 Hz with a lighter glide, and a second, higher one for the click (Attack its
+    // level, Body Decay its length).
     void hitKick (float decay, const Shared& sh)
     {
         const float attack = slot (0), tone = slot (1), depth = slot (2), time = slot (3);
         x[0] = slot (4);
         lpa[0] = onePoleCoef (300.0f * exp2Fast (5.0f * tone), sh.rate);
+        lp[1] = 0.0f;
         if (model == m909)
         {
             ph[0] = 0.0f;
-            e[0] = amp, ec[0] = decayCoef (decay, sh.rate);
-            bendMul = exp2Fast (3.0f * depth) - 1.0f;
-            penv = 1.0f, pcoef = decayCoef (0.03f * std::pow (30.0f, time), sh.rate);
-            e[1] = amp * attack * 0.8f, ec[1] = decayCoef (0.003f, sh.rate); // the pulse (a short fall: no branch)
+            const float tau = decay / 9.23f; // the held envelope (1 + t/tau) e^(-t/tau) falls 60 dB at 9.23 tau
+            e[0] = amp, e[3] = 0.0f, ec[0] = std::exp (-sh.invRate / tau), x[5] = sh.invRate / tau;
+            bendMul = 11.0f * depth;
+            penv = 1.0f, pcoef = std::exp (-sh.invRate / (0.004f + 0.03f * time));
+            e[1] = amp * attack * 1.2f, ec[1] = decayCoef (0.008f, sh.rate); // the pulse: merges with the first half-cycle
             e[2] = amp * attack * 0.6f, ec[2] = decayCoef (0.010f, sh.rate);
             x[1] = 1.7f + 6.0f * x[0];
             x[2] = 1.0f / tanhFast (x[1]);
             return;
         }
         res[0].r = decayCoef (decay, sh.rate);
-        res[0].strike (amp);
+        res[0].strike (0.7f * amp); // headroom: the attack's first cycles stand above the body, as recorded
+        penv = 1.0f, pcoef = std::exp (-sh.invRate / (0.001f + 0.0086f * time));
         if (model == m808)
         {
-            ratio = 1.0f + 3.0f * attack;
-            hold = (int32_t) ((0.001f + 0.012f * time) * sh.rate);
-            penv = 1.0f, pcoef = decayCoef (0.0015f, sh.rate);
-            x[3] = 3.8f * depth;
-            count = 0, countNext = std::max (1, (int32_t) (0.001f * sh.rate));
-            x[4] = -0.25f * (0.3f * amp + 0.071f);
+            bendMul = 7.14f * attack;
+            x[3] = 1.5f * depth;
+            e[3] = 1.43f * attack, ec[3] = std::exp (-sh.invRate / 0.003f);
+            x[4] = 0.2f;
         }
         else
         {
-            ratio = 1.0f, hold = 0, penv = 0.0f;
-            x[3] = 2.0f * depth;
+            bendMul = 4.0f * attack;
+            x[3] = 0.5f * depth;
+            e[3] = 0.0f, ec[3] = 0.0f;
+            x[4] = 0.05f;
             res[1].tune (hz * lfoPitch * 2.15f * invRate, decayCoef (0.015f + 0.06f * time, sh.rate));
             res[1].strike (amp * attack * 1.2f);
-            countNext = 0;
         }
-        lastFc = hz * lfoPitch * ratio * invRate;
+        lastFc = hz * lfoPitch * (1.0f + bendMul) * invRate;
         res[0].tune (lastFc);
     }
     [[gnu::always_inline]] bool renderKick (float* out, int n)
@@ -416,50 +409,47 @@ struct Voice
         {
             for (int i = 0; i < n; ++i)
             {
-                float fc = base;
-                if (penv > 1e-5f)
-                {
-                    penv *= pcoef;
-                    fc = base * (1.0f + bendMul * penv);
-                }
-                ph[0] += fc;
+                penv *= pcoef;
+                ph[0] += base * (1.0f + bendMul * penv);
                 ph[0] -= ph[0] >= 1.0f ? 1.0f : 0.0f;
-                float y = e[0] * shapedTriangle (ph[0], x[1], x[2]);
+                const float held = e[0] + e[3]; // (1 + t/tau) e^(-t/tau)
+                e[3] = ec[0] * (e[3] + x[5] * e[0]);
                 e[0] *= ec[0];
+                float w = shapedTriangle (ph[0], x[1], x[2]);
+                w *= w < 0.0f ? 1.0f : 0.7f; // the fuller negative half
+                float y = held * w;
+                lp[1] += (y - lp[1]) * 0.0015f; // the output's coupling: the asymmetry's DC out
+                y -= lp[1];
                 const float click = e[2] * noise.next() + e[1];
                 e[1] *= ec[1], e[2] *= ec[2];
                 lp[0] += (click - lp[0]) * lpa[0];
                 out[i] = y + lp[0];
             }
-            return e[0] > silent || e[2] > silent || std::fabs (lp[0]) > silent;
+            return e[0] + e[3] > silent || e[2] > silent || std::fabs (lp[0]) > silent;
         }
         const bool is808 = model == m808;
-        const float sigh = x[3];
+        const float sigh = x[3], asym = x[4];
         for (int i = 0; i < n; ++i)
         {
-            float fc = base;
-            if (hold > 0)
-                --hold, fc = base * ratio;
-            else if (penv > 1e-5f)
-            {
-                penv *= pcoef;
-                fc = base * (1.0f + (ratio - 1.0f) * penv);
-            }
-            const float swing = -res[0].im - 0.05f;
-            if (swing > 0.0f)
-                fc *= 1.0f + sigh * swing;
+            const float y = res[0].re;
+            penv *= pcoef; // no branch on it: a loop the compiler could split there would round differently
+            float fc = base * (1.0f + bendMul * penv);
+            if (y < -0.05f)
+                fc *= 1.0f + sigh * (-y - 0.05f);
             if (fc != lastFc)
-                res[0].tune (fc), lastFc = fc;
-            float y = res[0].run();
-            if (countNext > 0 && ++count == countNext)
-                res[0].strike (x[4]), countNext = 0;
+                res[0].tuneLow (fc), lastFc = fc;
+            res[0].ring();
+            float v = y * (1.0f + e[3]);
+            e[3] *= ec[3];
+            if (v < 0.0f)
+                v *= 1.0f + asym * std::fmin (1.0f, -v);
             if (! is808)
-                y += res[1].run();
-            lp[0] += (y - lp[0]) * lpa[0];
-            y = rails (lp[0]);
+                v += res[1].ring();
+            lp[0] += (v - lp[0]) * lpa[0];
+            float w = rails (lp[0]);
             if (excite > 0.0f)
-                y += excite * (tanhFast (3.0f * y) - y);
-            out[i] = y;
+                w += excite * (tanhFast (3.0f * w) - w);
+            out[i] = w;
         }
         return res[0].size() > silent || (! is808 && res[1].size() > silent) || std::fabs (lp[0]) > silent;
     }
@@ -467,12 +457,12 @@ struct Voice
     // --- Rim shot -------------------------------------------------------------------------------------------------
     // 808: two high-Q networks at 455 and 1667 Hz struck together, through a swing-type VCA (its short envelope is
     // Decay; it saturates and adds the upper harmonics), plus a little of the clap's band-passed noise, high passed.
-    // Body is the lower network's share, Tone the upper's and the high pass. 909 style: three networks, short, with
-    // a noise tick. 606 style (new): two higher networks.
+    // Body is the lower network's share, Tone the upper's and the high pass. 909 style: three networks near 220, 500
+    // and 1000 Hz, short, with a noise tick. 606 style (new): two higher networks.
     void hitRim (float decay, const Shared& sh)
     {
         const float tone = slot (0), body = slot (1);
-        static constexpr float ratios[] = { 3.664f, 1.58f, 2.0f };
+        static constexpr float ratios[] = { 3.664f, 2.27f, 2.0f };
         ratio = ratios[model];
         const float c = hz * lfoPitch * invRate;
         const bool vca = model == m808;
@@ -483,7 +473,7 @@ struct Voice
         res[1].strike (amp);
         if (model == m909)
         {
-            res[2].tune (c * 2.4f, decayCoef (decay * 0.6f, sh.rate));
+            res[2].tune (c * 4.5f, decayCoef (decay * 0.6f, sh.rate));
             res[2].strike (amp * 0.6f);
         }
         x[0] = 0.6f + 0.6f * body;
@@ -499,14 +489,15 @@ struct Voice
     {
         const float base2 = hz * lfoPitch * ratio * invRate;
         const bool three = model == m909, vca = model == m808;
+        const float level = vca ? 1.0f : 0.55f;
         for (int i = 0; i < n; ++i)
         {
-            const float y0 = res[0].run();
+            const float y0 = res[0].ring();
             if (x[2] > 0.0f)
                 res[1].tune (base2 * (1.0f + x[2] * y0));
-            float y = x[0] * y0 + x[1] * res[1].run();
+            float y = x[0] * y0 + x[1] * res[1].ring();
             if (three)
-                y += 0.7f * res[2].run();
+                y += 0.5f * res[2].ring();
             if (vca)
             {
                 y = 0.6f * e[0] * tanhFast (2.5f * y);
@@ -516,15 +507,15 @@ struct Voice
             e[1] *= ec[1];
             const float click = e[2];
             e[2] *= ec[2];
-            out[i] = f[1].hp (y + nz + click);
+            out[i] = f[1].hp (y + nz + click) * level;
         }
         return (e[0] > silent && (res[0].size() > silent || res[1].size() > silent)) || e[1] > silent || e[2] > silent;
     }
 
     // --- Snare ----------------------------------------------------------------------------------------------------
-    // 808: two networks, the fundamental at 238 Hz and its harmonic an octave up (Detune moves it), Tone their balance
+    // 808: two networks, the fundamental at 175 Hz and the second near 330 Hz (Detune moves it), Tone their balance
     // (the service notes' fundamental/harmonic ratio, with Osc Mix), a slight sweep; Snappy is white noise through its
-    // own envelope (Snappy Decay) and a high pass. 909 style: two VCOs at about 180 and 330 Hz shaped toward sines,
+    // own envelope (Snappy Decay) and a high pass. 909 style: two VCOs at about 200 and 330 Hz shaped toward sines,
     // each through its own envelope (the upper shorter), swept by Pitch Env; noise through a low pass (Tone) into a
     // high-passed band (Snappy, Snappy Decay) and a shorter unfiltered share. 606 style: one main network, a weak
     // second, louder snappy noise, the whole high passed.
@@ -532,13 +523,13 @@ struct Voice
     {
         const float tone = slot (0), snappy = slot (1);
         const float mix = clampf (slot (4) + (model == m808 ? tone : 0.0f), -1.0f, 1.0f);
-        static constexpr float ratios[] = { 2.0f, 1.833f, 1.5f }, pitchOct[] = { 0.3f, 1.0f, 0.6f };
+        static constexpr float ratios[] = { 1.89f, 1.65f, 1.5f }, pitchOct[] = { 0.3f, 1.0f, 0.6f };
         ratio = ratios[model] * exp2Fast (0.5f * slot (3));
         bendMul = exp2Fast (pitchOct[model] * slot (5)) - 1.0f;
         pcoef = decayCoef (0.004f * std::pow (40.0f, slot (6)), sh.rate);
         penv = 1.0f;
-        x[0] = 0.75f * std::fmin (1.0f, 1.0f - mix);
-        x[1] = (model == m606 ? 0.25f : 0.55f) * std::fmin (1.0f, 1.0f + mix);
+        x[0] = (model == m909 ? 0.75f : 0.55f) * std::fmin (1.0f, 1.0f - mix);
+        x[1] = (model == m909 ? 0.55f : model == m808 ? 0.22f : 0.18f) * std::fmin (1.0f, 1.0f + mix);
         x[2] = slot (7);
         if (model == m909)
         {
@@ -555,18 +546,20 @@ struct Voice
             res[0].strike (amp);
             res[1].strike (amp);
         }
-        const float snapTime = 0.05f * std::pow (16.0f, slot (2)) * (model == m606 ? 0.7f : 1.0f);
-        e[1] = amp * snappy * (model == m606 ? 1.1f : 0.9f), ec[1] = decayCoef (snapTime, sh.rate);
-        e[2] = amp * snappy * 0.35f, ec[2] = decayCoef (0.05f, sh.rate);
+        static constexpr float snapScale[] = { 1.0f, 2.5f, 0.9f }, snapLevel[] = { 2.0f, 1.8f, 2.2f };
+        const float snapTime = 0.05f * std::pow (16.0f, slot (2)) * snapScale[model];
+        e[1] = amp * snappy * snapLevel[model], ec[1] = decayCoef (snapTime, sh.rate);
+        e[2] = amp * snappy * 0.6f, ec[2] = decayCoef (0.06f, sh.rate);
+        lp[1] = model == m909 ? 0.0f : 1.0f, lpa[1] = 1.0f - std::exp (-sh.invRate / 0.007f); // the 909's swell
         if (model == m808)
         {
-            f[0].setHz (1600.0f, 1.3f, sh.rate);
-            f[1].setHz (10000.0f, 1.4f, sh.rate);
+            f[0].setHz (2200.0f, 1.3f, sh.rate);
+            f[1].setHz (9000.0f, 1.4f, sh.rate);
         }
         else if (model == m909)
         {
-            f[0].setHz (1500.0f * std::pow (8.0f, 0.5f * (tone + 1.0f)), 1.2f, sh.rate);
-            f[1].setHz (1800.0f, 1.0f, sh.rate);
+            f[0].setHz (4000.0f * std::pow (4.0f, 0.5f * (tone + 1.0f)), 1.2f, sh.rate);
+            f[1].setHz (2500.0f, 1.0f, sh.rate);
         }
         else
         {
@@ -593,10 +586,10 @@ struct Voice
             {
                 if (sweeping)
                     res[0].tune (fc);
-                y1 = res[0].run();
+                y1 = res[0].ring();
                 if (sweeping || x[2] > 0.0f)
                     res[1].tune (fc * ratio * (1.0f + 1.5f * x[2] * y1));
-                y2 = res[1].run();
+                y2 = res[1].ring();
             }
             else
             {
@@ -613,8 +606,9 @@ struct Voice
             float nz;
             if (m == m909)
             {
+                lp[1] += (1.0f - lp[1]) * lpa[1];
                 const float low = f[0].lp (w);
-                nz = f[1].hp (low) * e[1] + low * e[2];
+                nz = (f[1].hp (low) * e[1] + low * e[2]) * lp[1];
                 e[2] *= ec[2];
             }
             else
@@ -651,7 +645,7 @@ struct Voice
         e[1] = 0.0f, ec[1] = decayCoef (decay, sh.rate);
         x[0] = std::fmin (1.0f, 1.0f - slot (3)) * 1.6f;
         x[1] = std::fmin (1.0f, 1.0f + slot (3)) * 0.8f;
-        const float q = 1.0f + 5.0f * slot (5), size = slot (6);
+        const float q = 0.7f + 2.5f * slot (5), size = slot (6);
         clapShift = size < 0.0f ? exp2Fast (-0.7f * size) : 1.0f;
         const float centre = hz * lfoPitch * clapShift;
         f[0].setHz (centre, 1.0f / q, sh.rate);
@@ -694,8 +688,9 @@ struct Voice
     }
 
     // --- Tom and conga ----------------------------------------------------------------------------------------------
-    // 808 and 606: a network whose pitch rides on its own ring, as the 808's diodes make it: raised while the ring is
-    // big (Pitch Env how far, Pitch Decay how far down the ring it lasts), settling as it dies; a second, optional
+    // 808 and 606: a network struck into its cosine phase, its pitch riding on its own ring as the 808's diodes make
+    // it: raised while the ring is big (Pitch Env how far; the 606's falls further), settling as it dies, after a
+    // brief glide on the strike (Pitch Decay its length); a second, optional
     // tone (Osc Mix, Detune: 1.5 times the first). 909 style: VCOs reset by the hit and swept down by Pitch Env over
     // Pitch Decay. Shape pushes either toward a square; Color is the low tom's pink noise (its own tone and decay).
     void hitTom (float decay, const Shared& sh)
@@ -718,14 +713,15 @@ struct Voice
         }
         else
         {
-            x[5] = (model == m808 ? 1.0f : 0.6f) * pe;
-            x[6] = 0.4f * (1.0f - pd);
+            x[5] = (model == m808 ? 0.4f : 1.5f) * pe;             // how far the ring's size raises the pitch
+            penv = 1.0f, pcoef = std::exp (-4.0f * sh.invRate / (0.001f + 0.007f * pd)); // the attack's glide, a 4th-sample step
+            x[6] = 0.3f;
             res[0].r = decayCoef (decay, sh.rate);
             res[1].r = decayCoef (decay * 0.8f, sh.rate);
             res[0].strike (amp);
             res[1].strike (amp);
             count = 0;
-            const float c = hz * lfoPitch * invRate * (1.0f + x[5] * std::fmax (0.0f, 0.75f * res[0].size() - x[6]));
+            const float c = hz * lfoPitch * invRate * (1.0f + x[5] * 0.75f * res[0].size() + x[6]);
             res[0].tune (c);
             res[1].tune (c * ratio);
         }
@@ -743,19 +739,20 @@ struct Voice
             {
                 if ((++count & 3) == 0) // the diodes follow the ring's size: retuned every fourth sample
                 {
-                    const float c = base * (1.0f + x[5] * std::fmax (0.0f, 0.75f * res[0].size() - x[6]));
-                    res[0].tune (c);
+                    penv *= pcoef;
+                    const float c = base * (1.0f + x[5] * 0.75f * res[0].size() + x[6] * penv);
+                    res[0].tuneLow (c);
                     if (second)
-                        res[1].tune (c * ratio);
+                        res[1].tuneLow (c * ratio);
                 }
-                float y1 = res[0].run();
+                float y1 = res[0].ring();
                 if (shape)
                 {
                     const float size = res[0].size() + 1e-9f;
                     const float w = y1 / size;
                     y1 += x[2] * (tanhFast (x[3] * w) * x[4] - w) * size;
                 }
-                y = x[0] * y1 + (second ? x[1] * res[1].run() : 0.0f);
+                y = x[0] * y1 + (second ? x[1] * res[1].ring() : 0.0f);
             }
             else
             {
@@ -809,7 +806,7 @@ struct Voice
         for (int k = 0; k < 6; ++k)
         {
             metalBase[k] = geo * std::pow (set[k] / geo, spread);
-            gain[k] = clampf (1.0f + 5.0f * blend - (float) k, 0.0f, 1.0f);
+            gain[k] = clampf (1.0f + 5.0f * blend - (float) k, 0.0f, 1.0f) * metalWeight[k];
             sum += gain[k];
             dt[k] = metalBase[k] * hz * lfoPitch * invRate;
         }
@@ -819,17 +816,21 @@ struct Voice
         x[3] = 1.0f / std::fmax (sum, 1.0f);
         const float err = slot (6);
         e[0] = amp, ec[0] = decayCoef (decay, sh.rate);
+        // The swing VCAs let go below a share of the envelope's peak: the 808 closed hat's fade bends down to nothing
+        // (about 90 ms at the default), the open hat's holds then drops.
+        const float knee = model == m606 ? 0.0f : spec->knee; // the 606's hats decay plainly (as recorded)
+        x[12] = knee * amp, x[13] = 1.0f / (1.0f - knee);
         if (model == m909)
         {
             quant = exp2Fast (5.0f - 3.0f * err);
-            clockInc = 30000.0f * hz * lfoPitch / spec->baseHz * invRate;
+            clockInc = 30000.0f * hz * lfoPitch / spec->hz[model] * invRate;
             clock = 1.0f;
-            const float natural = spec->decay[m909][1] * spec->baseHz / (hz * lfoPitch); // the sample's own length
+            const float natural = spec->decay[m909][1] * spec->hz[model] / (hz * lfoPitch); // the sample's own length
             e[1] = 1.0f, ec[1] = decayCoef (natural, sh.rate);
-            f[0].setHz ((cymbal ? 3000.0f : 6500.0f) * exp2Fast (tone), 1.2f, sh.rate);
-            f[1].setHz (3300.0f * exp2Fast (2.0f * (slot (2) - 0.5f)), 1.0f / (2.0f * std::pow (4.0f, slot (1))), sh.rate);
-            x[4] = cymbal ? 0.6f * std::fmax (0.0f, slot (1) + 0.5f) : 0.0f; // the bell band's share
-            f[2].setHz (12000.0f, 1.3f, sh.rate);
+            f[0].setHz ((cymbal ? 1500.0f : 3000.0f) * exp2Fast (tone), 1.4f, sh.rate);
+            f[1].setHz (450.0f * std::pow (4.0f, slot (2) - 0.5f), 0.7f, sh.rate);
+            x[4] = cymbal ? 0.6f * std::fmax (0.0f, slot (1) + 0.5f) : 0.0f; // the body band's share
+            f[2].setHz (cymbal ? spec->aux : 14000.0f, 1.3f, sh.rate); // the DAC's low pass (the ride's brighter)
             return;
         }
         x[6] = err;
@@ -842,28 +843,29 @@ struct Voice
         {
             if (! cymbal)
             {
-                f[0].setHz (7100.0f * shift, 1.0f / (2.0f + 6.0f * slot (1)), sh.rate);
+                f[0].setHz (7600.0f * shift, 1.0f / (1.5f + 3.0f * slot (1)), sh.rate);
                 f[1].setHz (spec->aux * shift, 1.4f, sh.rate);
             }
             else
             {
                 const float q = 2.0f * std::pow (4.0f, slot (1));
                 f[0].setHz (3440.0f * exp2Fast (2.0f * (slot (2) - 0.5f)), 1.0f / q, sh.rate);
-                f[1].setHz (7100.0f, 1.0f / 3.0f, sh.rate);
+                f[1].setHz (7100.0f, 1.0f / 2.0f, sh.rate);
                 f[2].setHz (2200.0f, 1.4f, sh.rate);
                 f[3].setHz (5000.0f, 1.4f, sh.rate);
                 f[4].setHz (10500.0f, 0.8f, sh.rate);
                 lpa[0] = onePoleCoef (10500.0f, sh.rate);
-                e[1] = amp, ec[1] = decayCoef (decay * 0.5f, sh.rate);
+                e[1] = amp, ec[1] = decayCoef (decay, sh.rate);
+                e[0] = amp, ec[0] = decayCoef (decay * 0.6f, sh.rate);
                 e[2] = amp, ec[2] = decayCoef (0.12f * sh.kitDecay, sh.rate);
-                x[9] = 0.9f * (1.0f - 0.3f * tone), x[10] = 0.7f, x[11] = 0.7f * (1.0f + tone);
+                x[9] = 0.12f * (1.0f - 0.3f * tone), x[10] = 0.25f, x[11] = 3.0f * (1.0f + tone);
             }
         }
         else
         {
             const float lift = exp2Fast (1.2f * tone);
-            f[0].setHz ((cymbal ? 4200.0f : 7500.0f) * lift, 0.4f, sh.rate);
-            f[1].setHz ((cymbal ? 5500.0f : 8000.0f) * lift, 1.4f, sh.rate);
+            f[0].setHz ((cymbal ? 6000.0f : 7000.0f) * lift, 0.33f, sh.rate);
+            f[1].setHz ((cymbal ? 8000.0f : 9000.0f) * lift, 1.4f, sh.rate);
             f[2].setHz ((cymbal ? 3000.0f : 5000.0f) * lift, 1.4f, sh.rate);
             if (cymbal)
                 e[1] = amp, ec[1] = decayCoef (decay * 0.35f, sh.rate);
@@ -925,32 +927,35 @@ struct Voice
         {
             const float m = metal();
             float y;
+            const float kneeAt = x[12], kneeGain = x[13];
+            const float g0 = std::fmax (0.0f, e[0] - kneeAt) * kneeGain;
             if (is808 && ! cymbal)
             {
-                y = f[1].hp (e[0] * tanhFast (drive * f[0].bp (m)));
+                const float h = f[1].hp (g0 * tanhFast (drive * f[0].bp (m)));
                 e[0] *= ec[0];
+                y = (h - prevY) * diff; // the output stage's differentiator
+                prevY = h;
             }
             else if (is808)
             {
                 const float low = tanhFast (drive * f[0].bp (m)), high = tanhFast (drive * f[1].bp (m));
+                const float g1 = std::fmax (0.0f, e[1] - kneeAt) * kneeGain;
                 const float top = f[4].hp (e[2] * high);
                 lp[0] += (top - lp[0]) * lpa[0];
-                y = x[9] * f[2].hp (e[0] * low) + x[10] * f[3].hp (e[1] * high) + x[11] * (top - lp[0]);
+                y = x[9] * f[2].hp (g0 * low) + x[10] * f[3].hp (g1 * high) + x[11] * (top - lp[0]);
                 e[0] *= ec[0], e[1] *= ec[1], e[2] *= ec[2];
+                const float d = (y - prevY) * diff; // the output stage's differentiator
+                prevY = y;
+                y = d;
             }
             else
             {
-                const float v = tanhFast (drive * (0.6f * f[0].bp (m) + 0.5f * f[1].hp (m)));
-                y = f[2].hp (v * (cymbal ? 0.6f * e[0] + 0.4f * e[1] : e[0]));
+                const float v = 0.8f * f[0].bp (m) + 0.25f * f[1].hp (m);
+                const float g1 = std::fmax (0.0f, e[1] - kneeAt) * kneeGain;
+                y = f[2].hp (v * (cymbal ? 0.6f * g0 + 0.4f * g1 : g0));
                 e[0] *= ec[0];
                 if (cymbal)
                     e[1] *= ec[1];
-            }
-            if (is808)
-            {
-                const float d = (y - prevY) * diff;
-                prevY = y;
-                y = d;
             }
             y *= level;
             if (grit)
@@ -964,16 +969,16 @@ struct Voice
             }
             out[i] = y;
         }
-        return e[0] > silent || (cymbal && (e[1] > silent || e[2] > silent));
+        return e[0] > std::fmax (silent, x[12]) || (cymbal && (e[1] > std::fmax (silent, x[12]) || e[2] > silent));
     }
 
     // --- Cowbell --------------------------------------------------------------------------------------------------
-    // The 808's: two squares at 540 and 800 Hz (Osc Mix, Detune), each gated, mixed into a band pass (Tone), an
-    // abrupt first fall then the long one (its RC network). Shape from square to sine, an optional third (Unison,
+    // The 808's: two squares at 540 and 800 Hz (Osc Mix, Detune), each gated, mixed into a band pass near 1 kHz
+    // (Tone) that keeps the upper on top, an abrupt first fall then a long, quiet second (its RC network; Decay). Shape from square to sine, an optional third (Unison,
     // semitones away), all frequency-modulated by a sine at Ratio times the first (XMod) with Noise in it.
     void hitCowbell (float decay, const Shared& sh)
     {
-        static constexpr float ratios[] = { 1.4815f, 1.4957f, 1.507f }, band[] = { 2640.0f, 3200.0f, 3600.0f };
+        static constexpr float ratios[] = { 1.4815f, 1.4957f, 1.507f }, band[] = { 1000.0f, 1200.0f, 1400.0f };
         ratio = ratios[model] * exp2Fast (0.3f * slot (0));
         const float mix = slot (1);
         x[0] = std::fmin (1.0f, 1.0f - mix);
@@ -986,9 +991,9 @@ struct Voice
         x[7] = std::fmin (1.0f, std::fabs (slot (6)) * 2.0f);
         const float c = hz * lfoPitch * invRate;
         dt[0] = c, dt[1] = c * ratio, dt[2] = c * x[6], dt[3] = c * x[5];
-        f[0].setHz (band[model] * exp2Fast (slot (7)), 0.4f, sh.rate);
-        e[0] = amp * 0.65f, ec[0] = decayCoef (0.04f, sh.rate);
-        e[1] = amp * 0.35f, ec[1] = decayCoef (decay, sh.rate);
+        f[0].setHz (band[model] * 0.85f * exp2Fast (slot (7)), 0.25f, sh.rate);
+        e[0] = amp * 0.85f, ec[0] = decayCoef (0.09f * sh.kitDecay, sh.rate);
+        e[1] = amp * 0.15f, ec[1] = decayCoef (decay, sh.rate);
     }
     [[gnu::always_inline]] float bellOsc (int k, float d, float shape)
     {
@@ -1011,7 +1016,8 @@ struct Voice
                 ph[3] -= ph[3] >= 1.0f ? 1.0f : 0.0f;
                 fm = 1.0f + x[2] * mod;
             }
-            float y = x[0] * bellOsc (0, dt[0] * fm, x[4]) + x[1] * bellOsc (1, dt[1] * fm, x[4]);
+            const float a = bellOsc (0, dt[0] * fm, x[4]), b = bellOsc (1, dt[1] * fm, x[4]);
+            float y = x[0] * a + x[1] * b + 0.25f * a * b; // the two gates' intermodulation
             if (unison)
                 y += x[7] * bellOsc (2, dt[2] * fm, x[4]);
             out[i] = f[0].bp (y) * (e[0] + e[1]);
@@ -1041,7 +1047,7 @@ struct Voice
         const bool two = model == m909;
         for (int i = 0; i < n; ++i)
         {
-            float y = res[0].run() + (two ? 0.7f * res[1].run() : 0.0f) + e[1] * noise.next();
+            float y = res[0].ring() + (two ? 0.7f * res[1].ring() : 0.0f) + e[1] * noise.next();
             e[1] *= ec[1];
             lp[0] += (y - lp[0]) * lpa[0];
             out[i] = 1.3f * (lp[0] * (1.0f - x[0]) + (y - lp[0]) * (1.0f + x[0]));
@@ -1061,6 +1067,7 @@ struct Voice
         rampLen = std::max (1, (int32_t) (attack * 0.001f * sh.rate));
         count = 0;
         e[0] = amp, ec[0] = decayCoef (decay, sh.rate);
+        lpa[0] = onePoleCoef (12000.0f, sh.rate);
     }
     [[gnu::always_inline]] bool renderMaraca (float* out, int n)
     {
@@ -1072,6 +1079,8 @@ struct Voice
             float y = f[0].hp (nz);
             if (band)
                 y = 0.6f * y + 0.5f * f[1].bp (nz);
+            lp[0] += (y - lp[0]) * lpa[0];
+            y = lp[0];
             float g = e[0];
             if (count < rampLen)
                 g *= step * (float) ++count;

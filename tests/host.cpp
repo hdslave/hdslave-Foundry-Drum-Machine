@@ -601,15 +601,15 @@ void testCharacter()
         i.play (frames, { { 0, 36 + voice, vel } }, l, r);
         return l;
     };
-    // 808 kick: the attack about twice the pitch for its first milliseconds (a short first lobe), the sigh (sharper
-    // early than late), and 49.5 Hz once it settles.
+    // 808 kick, as recorded from the machine: a short first lobe (the cosine-phase strike and the raised attack), the
+    // sigh (sharper early than late), and about 53 Hz once it settles.
     {
         const auto k = alone (0, 0, { { "BD Decay", 0.7 } });
         const long firstZero = [&] { for (size_t i = 10; i < 4800; ++i) if (k[i - 1] > 0.0f && k[i] <= 0.0f) return (long) i; return -1L; }();
-        CHECK_MSG (firstZero > 0 && firstZero < 0.008 * 48000, "first lobe ends at %ld", firstZero); // 49.5 Hz alone: 10 ms
+        CHECK_MSG (firstZero > 0.001 * 48000 && firstZero < 0.0025 * 48000, "first lobe ends at %ld", firstZero); // recorded: 1.7 ms
         const double early = crossingsHz (k, 480, 9600, 48000.0), late = crossingsHz (k, 24000, 48000, 48000.0);
-        CHECK_MSG (early > late * 1.04 && early < late * 1.3, "sigh %g -> %g Hz", early, late);
-        CHECK_MSG (std::fabs (late - 49.5) < 1.0, "settles at %g Hz", late);
+        CHECK_MSG (early > late * 1.02 && early < late * 1.3, "sigh %g -> %g Hz", early, late);
+        CHECK_MSG (std::fabs (late - 53.0) < 1.0, "settles at %g Hz", late);
         // Louder sighs more (the leakage follows the swing).
         const auto soft = alone (0, 0, { { "BD Decay", 0.7 }, { "BD Vel Sens", 1.0 } }, 0.3);
         CHECK (crossingsHz (soft, 480, 9600, 48000.0) < early);
@@ -618,12 +618,12 @@ void testCharacter()
     {
         const auto k = alone (15, 1, { { "B2 Decay", 0.7 }, { "B2 Attack", 0.0 } });
         const double start = crossingsHz (k, 0, 1440, 48000.0), settled = crossingsHz (k, 24000, 48000, 48000.0);
-        CHECK_MSG (start > 1.4 * settled && std::fabs (settled - 54.45) < 1.5, "%g -> %g Hz", start, settled);
+        CHECK_MSG (start > 1.4 * settled && std::fabs (settled - 53.0) < 1.5, "%g -> %g Hz", start, settled);
     }
-    // 808 snare's two networks at 238 and 476 Hz; the rim shot's at 455 and 1667 Hz.
+    // 808 snare's two networks at 175 and 331 Hz (as recorded); the rim shot's at 455 and 1667 Hz.
     {
         const auto sd = alone (2, 0, { { "SD Snappy", 0.0 }, { "SD Pitch Env", 0.0 } });
-        CHECK (partialAt (sd, 0, 4800, 238.0, 48000.0) && partialAt (sd, 0, 4800, 476.0, 48000.0));
+        CHECK (partialAt (sd, 0, 4800, 175.0, 48000.0) && partialAt (sd, 0, 4800, 331.0, 48000.0));
         const auto rs = alone (1, 0, { { "RS Noise", 0.0 }, { "RS Click", 0.0 }, { "RS Decay", 0.5 } });
         CHECK (partialAt (rs, 0, 2400, 455.0, 48000.0) && partialAt (rs, 0, 2400, 1667.0, 48000.0));
     }
@@ -631,7 +631,7 @@ void testCharacter()
     {
         const auto lt = alone (4, 0, { { "LT Color", 0.0 }, { "LT Decay", 0.8 } });
         const double early = crossingsHz (lt, 0, 2400, 48000.0), late = crossingsHz (lt, 14400, 28800, 48000.0);
-        CHECK_MSG (early > late * 1.05 && std::fabs (late - 90.0) < 3.0, "%g -> %g Hz", early, late);
+        CHECK_MSG (early > late * 1.03 && std::fabs (late - 91.0) < 3.0, "%g -> %g Hz", early, late);
     }
     // 808 hats: their energy above 6 kHz (the 7.1 kHz band, clipped and high passed).
     {
@@ -770,7 +770,7 @@ void testPerformance()
         for (size_t k = 0; k < f.size(); ++k)
             main[k] = f[k] - grace[k];
         CHECK_MSG (onsetOf (main, 0, 1e-7) == 600 + 960, "%ld", onsetOf (main, 0, 1e-7));
-        CHECK (peakOf (main) > peakOf (grace) * 1.5);
+        CHECK (peakOf (main) > peakOf (grace) * 1.2);
     }
     // Sub-Step 4 at Step 1/16, 120 bpm: four hits 1500 frames apart.
     {
@@ -830,7 +830,7 @@ void testKeysAndMaps()
         return crossingsHz (l, 4800, 48000, 48000.0);
     };
     const double c3 = pitch (60, {}), c4 = pitch (72, {}), pad = pitch (36, {});
-    CHECK_MSG (std::fabs (c3 - 49.0) < 1.0, "%g", c3);
+    CHECK_MSG (std::fabs (c3 - 53.0) < 1.0, "%g", c3);
     CHECK_MSG (std::fabs (c4 / c3 - 2.0) < 0.02, "%g %g", c3, c4);
     CHECK (std::fabs (pad - c3) < 0.5);
     CHECK_MSG (std::fabs (pitch (36, { { "BD Tune", 12.0 } }) / c3 - 2.0) < 0.02, "tune");
@@ -870,7 +870,7 @@ void testSideChain()
     auto hat = [] (double duck) {
         Instance i;
         auto values = solo (8);
-        values.insert (values.end(), { { "BD Level", -60.0 }, { "SC Source", 1.0 }, { "OH Duck", duck }, { "OH Decay", 1.0 } });
+        values.insert (values.end(), { { "BD Level", -60.0 }, { "SC Source", 1.0 }, { "OH Duck", duck }, { "OH Decay", 1.0 }, { "OH Model", 1.0 } });
         i.setup (values);
         std::vector<float> l, r;
         i.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 0.75 } }, l, r);
@@ -918,7 +918,19 @@ void testSideChain()
     };
     const auto mixKeyed = keyed (0.0), kickKeyed = keyed (1.0);
     CHECK (energyOf (kickKeyed, 12200, 16000) < energyOf (mixKeyed, 12200, 16000) * 0.5);
-    CHECK (energyOf (kickKeyed, 1000, 11000) <= energyOf (mixKeyed, 1000, 11000) * 1.0001); // keyed, no makeup lift
+    // Keyed, no makeup: before the kick the hat is as it is with no compressor at all.
+    {
+        Instance d;
+        auto values = solo (8);
+        values.insert (values.end(), { { "BD Level", -60.0 }, { "OH Decay", 1.0 }, { "Comp", 0.0 } });
+        d.setup (values);
+        std::vector<float> dl, dr;
+        d.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 1.0 } }, dl, dr);
+        double diff = 0.0;
+        for (size_t k = 0; k < 11000; ++k)
+            diff = std::max (diff, (double) std::fabs (dl[k] - kickKeyed[k]));
+        CHECK_MSG (diff < 1e-6, "keyed comp moved the hat before the kick by %g", diff);
+    }
 }
 
 // The effects: reverb and delay tails, the analog filter darkening, the compressor, Clip.
