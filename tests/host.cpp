@@ -1,9 +1,10 @@
 // Loads Foundry.clap as a host does and checks it: description, ports, note names and the drum map Melodee reads;
 // every parameter's range, text and default; state; presets; each pad's voice in each model (sounding, bounded,
-// starting on its frame); velocity, accent, choke groups, the host's choke; Prob, Cycle, Flam, Sub-Step, Nudge,
-// Link, Humanize; the Keys voice's pitch; the GM key map; the side chain; the effects; the same output whatever the
-// block size; finite, bounded output at random and extreme settings, at 44.1, 48 and 96 kHz. Prints each voice's
-// level and length in each model, and writes demo renders as WAV files into the output folder.
+// starting on its frame); velocity, accent, choke groups, the host's choke; hits on one sample; Prob, Cycle, Flam,
+// Sub-Step, Nudge, Link, Humanize; the Keys voice's pitch; the GM key map; the side chain; the effects, the delay
+// turned while it sleeps; the same output whatever the block size; finite, bounded output at random and extreme
+// settings, at 44.1, 48 and 96 kHz. Prints each voice's level and length in each model, and writes demo renders as
+// WAV files into the output folder.
 //   host Foundry.clap OUT_FOLDER
 #include "wav.h"
 #include "../src/melodee_screen.h"
@@ -858,6 +859,62 @@ void testChoke()
     CHECK (same (std::vector<float> (open.begin(), open.begin() + 12000), std::vector<float> (cut.begin(), cut.begin() + 12000)));
 }
 
+// Hits on one sample (Melodee gives every note of a 128-frame block its first frame). One voice hit twice plays the
+// louder hit once: an accent and a ghost together keep the accent whichever came first, on the 909 kick (its level
+// set by the hit) and the 808 kick (a resonator that would take both strikes); two equal hits are one; on a tie the
+// later one plays (the Keys voice's pitch shows which). A frame apart, both play. The closed and the open hat
+// together: the closed hat whole, the open one dropped, whichever came first. The open hat linked to the closed one
+// (one note's two layers in one choke group): both in full, the sum of each alone.
+void testSameInstant()
+{
+    auto render = [] (int keep, std::vector<std::pair<std::string, double>> values, std::vector<Note> notes) {
+        Instance i;
+        auto base = solo (keep);
+        base.push_back ({ "Clip", 0.0 });
+        base.insert (base.end(), values.begin(), values.end());
+        i.setup (base);
+        std::vector<float> l, r;
+        i.play (48000, notes, l, r);
+        return l;
+    };
+    auto db = [] (const std::vector<float>& a, const std::vector<float>& b) { return 20.0 * std::log10 (peakOf (a) / peakOf (b)); };
+    for (int model : { 1, 0 })
+    {
+        const std::vector<std::pair<std::string, double>> kick = { { "BD Model", (double) model } };
+        const auto accent = render (0, kick, { { 600, padKey (0), 1.0 } });
+        const auto ghostAfter = render (0, kick, { { 600, padKey (0), 1.0 }, { 600, padKey (0), 0.4 } });
+        const auto ghostFirst = render (0, kick, { { 600, padKey (0), 0.4 }, { 600, padKey (0), 1.0 } });
+        CHECK_MSG (same (ghostAfter, accent), "%s kick, accent then ghost: %+.1f dB against the accent alone", models[model], db (ghostAfter, accent));
+        CHECK_MSG (same (ghostFirst, accent), "%s kick, ghost then accent: %+.1f dB against the accent alone", models[model], db (ghostFirst, accent));
+        const auto one = render (0, kick, { { 600, padKey (0), 0.7 } });
+        const auto twice = render (0, kick, { { 600, padKey (0), 0.7 }, { 600, padKey (0), 0.7 } });
+        CHECK_MSG (same (twice, one), "%s kick, two equal hits: %+.1f dB against one", models[model], db (twice, one));
+        CHECK (! same (render (0, kick, { { 600, padKey (0), 1.0 }, { 601, padKey (0), 0.4 } }), accent));
+    }
+    {
+        const std::vector<std::pair<std::string, double>> keys = { { "Keys Voice", 1.0 }, { "BD Decay", 1.0 } };
+        const auto later = render (0, keys, { { 600, 72, 0.7 } });
+        CHECK (same (render (0, keys, { { 600, 60, 0.7 }, { 600, 72, 0.7 } }), later));
+        CHECK (! same (render (0, keys, { { 600, 60, 0.7 } }), later));
+    }
+    const std::vector<std::pair<std::string, double>> hats = { { "OH Level", -7.0 }, { "OH Decay", 0.8 } };
+    const auto closed = render (7, hats, { { 600, padKey (7), 0.8 } });
+    const auto both = render (7, hats, { { 600, padKey (7), 0.8 }, { 600, padKey (8), 0.8 } });
+    const auto openFirst = render (7, hats, { { 600, padKey (8), 0.8 }, { 600, padKey (7), 0.8 } });
+    CHECK_MSG (same (both, closed), "CH then OH: after 4 ms %.3g of the CH alone's energy", energyOf (both, 800) / energyOf (closed, 800));
+    CHECK_MSG (same (openFirst, closed), "OH then CH: after 4 ms %.3g of the CH alone's energy", energyOf (openFirst, 800) / energyOf (closed, 800));
+    auto layers = hats;
+    layers.push_back ({ "OH Link", 8.0 });
+    const auto layered = render (7, layers, { { 600, padKey (7), 0.8 } });
+    auto openOnly = hats;
+    openOnly.push_back ({ "CH Level", -60.0 });
+    const auto open = render (7, openOnly, { { 600, padKey (8), 0.8 } });
+    double diff = 0.0;
+    for (size_t k = 0; k < layered.size(); ++k)
+        diff = std::max (diff, (double) std::fabs (layered[k] - (closed[k] + open[k])));
+    CHECK_MSG (diff < 1e-6 && peakOf (open) > 0.01, "OH linked to CH differs from the two alone by %g", diff);
+}
+
 // A voice played in one style then hit in another carries nothing of the first: a 909 closed hat still ringing, the
 // Model turned to 606 and the hat hit again, against the 606 hat hit fresh (the oscillators' phases differ, so the
 // levels are compared, not the samples).
@@ -1250,6 +1307,35 @@ void testPerformance()
         CHECK_MSG (diff < 1e-6, "linked differs by %g", diff);
         CHECK (energyOf (both) > energyOf (one ({}, { { 100, padKey (0) } })) * 1.2);
     }
+    // Humanize moves a note's layers together: B2 linked to BD, each heard alone, is late by what BD is late, hit
+    // after hit, playing and stopped (each layer's lateness against its own unhumanized start, found where it first
+    // passes 1 % of that hit's peak, so the softening does not move it).
+    for (bool playing : { true, false })
+    {
+        auto starts = [&] (int keep, double human) {
+            Instance i;
+            auto values = solo (keep);
+            values.insert (values.end(), { { "B2 Link", 1.0 }, { "Humanize", human }, { "BD Decay", 0.0 }, { "B2 Decay", 0.0 } });
+            i.setup (values);
+            std::vector<Note> notes;
+            for (int k = 0; k < 16; ++k)
+                notes.push_back ({ (uint64_t) k * 12000 + 600, padKey (0), 0.75 });
+            std::vector<float> l, r;
+            i.play (16 * 12000, notes, l, r, playing);
+            std::vector<long> at;
+            for (int k = 0; k < 16; ++k)
+                at.push_back (onsetOf (l, (size_t) k * 12000, 1e-2 * peakOf (l, (size_t) k * 12000, (size_t) (k + 1) * 12000)));
+            return at;
+        };
+        const auto bd = starts (0, 1.0), bd0 = starts (0, 0.0), b2 = starts (15, 1.0), b20 = starts (15, 0.0);
+        int apart = 0, late = 0;
+        for (int k = 0; k < 16; ++k)
+        {
+            apart += bd[k] - bd0[k] != b2[k] - b20[k];
+            late += bd[k] > bd0[k];
+        }
+        CHECK_MSG (apart == 0 && late >= 8, "%s: B2 linked to BD lands apart from it on %d of 16 hits (%d late)", playing ? "playing" : "stopped", apart, late);
+    }
 }
 
 // Keys voice: notes outside the pads play the chosen voice transposed from note 60; GM key map.
@@ -1397,6 +1483,75 @@ void testEffects()
     CHECK (finiteBounded (squashed.first, 1.0));
     const auto limited = clap ({ { "CP Level", 6.0 }, { "Clip", 2.0 }, { "Volume", 6.0 } });
     CHECK (peakOf (limited.first) <= 0.98 + 1e-6);
+}
+
+// Delay Time turned while the delay sleeps (between plays; a tempo change while stopped does the same): the next
+// hit's echoes are those of a delay set to the new time from the start, its first echo on time and at pitch. Shorter
+// (1/16 to 1/32 after a maracas hit), and longer (1/32 to 1/4 after a run of them, the line then holding them from
+// before it went quiet: none of that comes back), at three block sizes. The maracas go to the delay too; the claves,
+// hit after the turn, are fresh in both renders.
+void testDelayWake()
+{
+    auto claves = [] (std::vector<std::pair<std::string, double>> values, std::vector<Note> notes, uint64_t frames, uint32_t block,
+                      uint64_t turnAt = 0, double turnTo = 0.0) {
+        Instance i;
+        auto base = solo (12);
+        base.insert (base.end(), { { "CL Delay", 0.6 }, { "MA Level", -3.0 }, { "MA Delay", 0.6 }, { "Delay Mode", 0.0 }, { "Clip", 0.0 } });
+        base.insert (base.end(), values.begin(), values.end());
+        i.setup (base);
+        const clap_id time = i.id ("Delay Time");
+        std::vector<float> l, r;
+        i.render (frames, block, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            for (const auto& nt : notes)
+                if (nt.frame >= at && nt.frame < at + n)
+                    e.note ((uint32_t) (nt.frame - at), CLAP_EVENT_NOTE_ON, (int16_t) nt.key, nt.velocity);
+            if (turnAt > 0 && turnAt >= at && turnAt < at + n)
+                e.param ((uint32_t) (turnAt - at), time, turnTo);
+            e.sort();
+        });
+        return l;
+    };
+    // The output from `from` on against a fresh delay at the new time hit there: the largest difference, and where
+    // the first echo peaks in each.
+    auto against = [] (const std::vector<float>& x, const std::vector<float>& fresh, size_t from, size_t echoFrom, long& peakX, long& peakFresh) {
+        double diff = 0.0, px = 0.0, pf = 0.0;
+        peakX = peakFresh = -1;
+        for (size_t k = from; k < x.size(); ++k)
+        {
+            diff = std::max (diff, (double) std::fabs (x[k] - fresh[k]));
+            if (k >= echoFrom && std::fabs (x[k]) > px) px = std::fabs (x[k]), peakX = (long) k;
+            if (k >= echoFrom && std::fabs (fresh[k]) > pf) pf = std::fabs (fresh[k]), peakFresh = (long) k;
+        }
+        return diff;
+    };
+    for (uint32_t block : { 128u, 37u, 4096u })
+    {
+        // Shorter: 1/16 (6000 frames at 120 bpm) asleep by 48000, turned to 1/32 (3000) there, claves at 60000.
+        {
+            const std::vector<std::pair<std::string, double>> v = { { "Delay Time", 2.0 }, { "Delay Feedback", 0.0 } };
+            const auto turned = claves (v, { { 0, padKey (13) }, { 60000, padKey (12) } }, 72000, block, 48000, 0.0);
+            const auto fresh = claves ({ { "Delay Time", 0.0 }, { "Delay Feedback", 0.0 } }, { { 60000, padKey (12) } }, 72000, block);
+            long pt = 0, pf = 0;
+            const double diff = against (turned, fresh, 60000, 62000, pt, pf);
+            CHECK_MSG (diff < 1e-6 && pt == pf && peakOf (fresh, 62000) > 0.02, "block %u, shorter: %g off a fresh delay, first echo peaks at +%ld, fresh at +%ld",
+                       block, diff, pt - 60000, pf - 60000);
+        }
+        // Longer: 1/32 with maracas every 3000 frames to 93000, asleep by 150000, turned to 1/4 (24000), claves at 160000.
+        {
+            std::vector<Note> run;
+            for (uint64_t f = 0; f < 96000; f += 3000)
+                run.push_back ({ f, padKey (13) });
+            run.push_back ({ 160000, padKey (12) });
+            const std::vector<std::pair<std::string, double>> v = { { "Delay Time", 0.0 }, { "Delay Feedback", 0.0 } };
+            const auto turned = claves (v, run, 192000, block, 150000, 8.0);
+            const auto fresh = claves ({ { "Delay Time", 8.0 }, { "Delay Feedback", 0.0 } }, { { 160000, padKey (12) } }, 192000, block);
+            long pt = 0, pf = 0;
+            const double diff = against (turned, fresh, 160000, 180000, pt, pf);
+            CHECK_MSG (diff < 1e-6 && pt == pf && peakOf (fresh, 180000) > 0.02,
+                       "block %u, longer: %g off a fresh delay (%.3g before its first echo), first echo peaks at +%ld, fresh at +%ld", block, diff,
+                       peakOf (turned, 166000, 183900), pt - 160000, pf - 160000);
+        }
+    }
 }
 
 // The same output whatever the block size, with notes, knob moves, an LFO, flams, sub-steps and the effects.
@@ -1560,6 +1715,7 @@ int main (int argc, char** argv)
     testCharacter();
     testVelocityAccent();
     testChoke();
+    testSameInstant();
     testModelSwitch();
     testGeneratorControls();
     testEnds();
@@ -1567,6 +1723,7 @@ int main (int argc, char** argv)
     testKeysAndMaps();
     testSideChain();
     testEffects();
+    testDelayWake();
     testBlockSizes();
     testExtremes();
     testSilence();

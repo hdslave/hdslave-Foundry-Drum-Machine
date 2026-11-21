@@ -163,6 +163,8 @@ struct Reverb
     }
 };
 
+// Its time glides to a new setting while it plays (the echoes in flight bend, as a tape's do), and is set at once
+// when it wakes: asleep, the line is silent, and the first echo comes on time and at pitch.
 struct Delay
 {
     std::vector<float> bl, br;
@@ -170,7 +172,11 @@ struct Delay
     float cur = 1.0f, target = 1.0f, feedback = 0.0f, toneA = 0.5f, hpA = 0.005f, level = 0.5f, toRev = 0.0f;
     float lpL = 0.0f, lpR = 0.0f, hpL = 0.0f, hpR = 0.0f, wow = 0.0f, wowInc = 0.0f;
     int mode = 0, quiet = 0, sleepAfter = 1;
-    bool asleep = true, fresh = true;
+    // The line's last `real` samples are what it would hold had it run on while it slept: the silence it wrote
+    // before sleeping, and what it has taken since. Older ones are from before that silence; a read about to reach
+    // them (the time turned up since) finds them zeroed first.
+    int real = 1;
+    bool asleep = true;
     float rate = 48000.0f;
 
     void prepare (float sampleRate)
@@ -188,15 +194,14 @@ struct Delay
         std::fill (br.begin(), br.end(), 0.0f);
         lpL = lpR = hpL = hpR = 0.0f;
         w = 0;
-        asleep = true, fresh = true;
+        asleep = true;
         quiet = 0;
+        real = size;
     }
     void set (double seconds, float fb, float tone, int m, float lvl, float rev)
     {
         // Under the buffer with room for Tape's wow (up to 0.3 % longer).
         target = (float) std::fmin (std::fmax (seconds * rate, 1.0), (double) size / 1.004 - 8.0);
-        if (fresh)
-            cur = target;
         feedback = fb, mode = m, level = lvl, toRev = rev;
         toneA = onePoleCoef (1000.0f * std::pow (16.0f, tone), rate);
         hpA = onePoleCoef (60.0f, rate);
@@ -210,6 +215,21 @@ struct Delay
         const float frac = at - (float) i0;
         return b[(size_t) i0] + frac * (b[(size_t) i0 + 1] - b[(size_t) i0]);
     }
+    // The samples `from` + 1 to `to` back from the write point zeroed (both lines), and the guards kept up.
+    void silence (int from, int to)
+    {
+        int at = w - to;
+        at += at < 0 ? size : 0;
+        for (int left = to - from; left > 0;)
+        {
+            const int run = std::min (left, size - at);
+            std::fill (bl.begin() + at, bl.begin() + at + run, 0.0f);
+            std::fill (br.begin() + at, br.begin() + at + run, 0.0f);
+            left -= run, at = 0;
+        }
+        bl[(size_t) size] = bl[0], bl[(size_t) size + 1] = bl[1];
+        br[(size_t) size] = br[0], br[(size_t) size + 1] = br[1];
+    }
     // Adds the echoes of `in` to left and right, and Delay > Reverb's share of them to `rev`.
     void process (const float* in, float* left, float* right, float* rev, int n)
     {
@@ -221,9 +241,14 @@ struct Delay
             if (s == n)
                 return;
             asleep = false, quiet = 0;
-            if (fresh)
-                cur = target, fresh = false;
+            cur = target;
         }
+        // The farthest back these samples read (the time between where it is and where it glides to, Tape's wow,
+        // the interpolation's next sample); the time does not move within a call.
+        const int reach = (int) (std::fmax (cur, target) * 1.004f) + 3;
+        if (reach > real)
+            silence (real, reach), real = reach;
+        const int from = s;
         for (; s < n; ++s)
         {
             cur += (target - cur) * 0.0007f;
@@ -261,12 +286,14 @@ struct Delay
                 if (++quiet > sleepAfter)
                 {
                     asleep = true;
+                    real = std::min (quiet, size); // the silence it wrote; before that, what it played before going quiet
                     return;
                 }
             }
             else
                 quiet = 0;
         }
+        real = std::min (real + (n - from), size);
     }
 };
 } // namespace foundry

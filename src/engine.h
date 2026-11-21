@@ -22,6 +22,7 @@ struct Hit
 {
     int64_t due;
     float velocity, accent, transpose;
+    uint32_t note; // the note it came from (its linked layers' hits share it)
 };
 
 struct Engine
@@ -40,6 +41,7 @@ struct Engine
     int queued[voiceCount] {};
     int64_t nextDue = INT64_MAX;
     uint32_t stoppedHits[voiceCount] {};
+    uint32_t notes = 0; // notes played, numbering their hits
 
     // The host's transport: the song's place is anchored to a sample and counted on from it, so it does not wobble
     // with the host's rounding; a jump, a tempo change or Play anchors it again.
@@ -212,12 +214,17 @@ struct Engine
         playVoice (v, velocity, transpose);
     }
 
+    // The note's voice and the voices linked to it. Humanize's numbers (how late, how much softer) are the note's,
+    // drawn as its voice's, so its layers land together; each layer keeps its own Prob and Cycle.
     void playVoice (int v, float velocity, float transpose)
     {
-        hitVoice (v, velocity, transpose);
+        const uint32_t note = ++notes;
+        const double beats = beatsAt (now);
+        const float late = chance (v, beats, 1), softer = chance (v, beats, 2);
+        hitVoice (v, velocity, transpose, note, late, softer);
         for (int u = 0; u < voiceCount; ++u)
             if (u != v && (int) voices[u].p[V::link] == v + 1)
-                hitVoice (u, velocity, transpose);
+                hitVoice (u, velocity, transpose, note, late, softer);
     }
 
     // A choke from the host (a pad cut): the voice and the voices linked to it fade, and their waiting hits go.
@@ -250,16 +257,14 @@ struct Engine
         return hash01 ((uint64_t) stoppedHits[v] * 64u + (uint64_t) v * 4u + (uint64_t) k + 0xc0ffeeull);
     }
 
-    void hitVoice (int v, float velocity, float transpose)
+    void hitVoice (int v, float velocity, float transpose, uint32_t note, float late, float softer)
     {
         const Voice& voice = voices[v];
         const double beats = beatsAt (now);
-        float r[3];
-        for (int k = 0; k < 3; ++k)
-            r[k] = chance (v, beats, k);
+        const float r = chance (v, beats, 0);
         if (! playing)
             ++stoppedHits[v];
-        if (voice.p[V::prob] < 1.0f && r[0] >= voice.p[V::prob])
+        if (voice.p[V::prob] < 1.0f && r >= voice.p[V::prob])
             return;
         const int cycle = (int) voice.p[V::cycle];
         if (playing && cycle != 0)
@@ -282,8 +287,8 @@ struct Engine
         const float human = m[M::humanize];
         float vel = std::pow (clampf (velocity, 0.0f, 1.0f), velCurveExponent[(int) m[M::velCurve]]);
         const float accent = velocity * 127.0f >= m[M::accentVel] - 0.5f ? m[M::accent] : 0.0f;
-        vel *= 1.0f - 0.25f * human * r[2];
-        const double ms = voice.p[V::nudge] + 8.0 * human * r[1];
+        vel *= 1.0f - 0.25f * human * softer;
+        const double ms = voice.p[V::nudge] + 8.0 * human * late;
         const double start = ms * 0.001 * rate;
         const int subs = subStepCounts[(int) voice.p[V::subStep]];
         const double spacing = stepBeats[(int) m[M::step]] * 60.0 / bpm * rate / subs;
@@ -293,11 +298,11 @@ struct Engine
             const double t = start + spacing * k;
             if (k == 0 && flam > 0.0)
             {
-                push (v, { now + std::llround (t), vel * 0.45f, 0.0f, transpose });
-                push (v, { now + std::llround (t + flam), vel, accent, transpose });
+                push (v, { now + std::llround (t), vel * 0.45f, 0.0f, transpose, note });
+                push (v, { now + std::llround (t + flam), vel, accent, transpose, note });
             }
             else
-                push (v, { now + std::llround (t), vel, accent, transpose });
+                push (v, { now + std::llround (t), vel, accent, transpose, note });
         }
     }
 
@@ -321,13 +326,37 @@ struct Engine
                 nextDue = std::min (nextDue, queue[v][0].due);
     }
 
-    void fire (int v, const Hit& h)
+    // How hard a hit strikes its voice: the level trigger() gives it, the accent in.
+    float strength (int v, const Hit& h) const
+    {
+        const float vs = voices[v].p[V::velSens];
+        return (1.0f - vs + vs * h.velocity) * (1.0f + h.accent * voices[v].p[V::accent]);
+    }
+    // Of voice v's first n hits (those due now), the one that plays: the strongest, the later on a tie; of `note`'s
+    // hits only, unless `any`. -1: none.
+    int strongest (int v, int n, bool any, uint32_t note) const
+    {
+        int best = -1;
+        float most = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            if (! any && queue[v][i].note != note)
+                continue;
+            const float s = strength (v, queue[v][i]);
+            if (best < 0 || s >= most)
+                best = i, most = s;
+        }
+        return best;
+    }
+
+    // `firing`: the voices hit on this sample, which this hit does not choke.
+    void fire (int v, const Hit& h, uint32_t firing)
     {
         Voice& voice = voices[v];
         const int group = (int) voice.p[V::choke];
         if (group != 0)
             for (int u = 0; u < voiceCount; ++u)
-                if (u != v && (int) voices[u].p[V::choke] == group)
+                if (u != v && ! ((firing >> u) & 1u) && (int) voices[u].p[V::choke] == group)
                     voices[u].choke();
         sh.lfoBeats = lfoBeats();
         voice.trigger (h.velocity, h.accent, h.transpose, sh);
@@ -336,18 +365,48 @@ struct Engine
         if (v == scVoice)
             duckEnv = 1.0f;
     }
+    // The hits due on this sample (the host gives every note of a block its first frame, so notes close together on
+    // one pad land on one sample). A voice hit more than once plays its strongest hit, once: an accent and a ghost
+    // together keep the accent. Voices of a choke group hit by separate notes: the lowest plays (the closed hat
+    // before the open one, as on the 808 and 909) and the others' hits go. Voices hit together never choke each
+    // other, so a note's linked layers all sound.
     void fireDue()
     {
+        int due[voiceCount], pick[voiceCount];
         for (int v = 0; v < voiceCount; ++v)
         {
-            int done = 0;
-            while (done < queued[v] && queue[v][done].due <= now)
-                fire (v, queue[v][done++]);
-            if (done > 0)
+            int n = 0;
+            while (n < queued[v] && queue[v][n].due <= now)
+                ++n;
+            due[v] = n;
+            pick[v] = strongest (v, n, true, 0);
+        }
+        uint32_t firing = 0;
+        for (int v = 0; v < voiceCount; ++v)
+        {
+            if (pick[v] < 0)
+                continue;
+            const int group = (int) voices[v].p[V::choke];
+            int lowest = v;
+            if (group != 0)
+                for (int u = 0; u < v && lowest == v; ++u)
+                    if (pick[u] >= 0 && (int) voices[u].p[V::choke] == group)
+                        lowest = u;
+            if (lowest != v)
+                pick[v] = strongest (v, due[v], false, queue[lowest][pick[lowest]].note);
+            if (pick[v] >= 0)
+                firing |= 1u << v;
+        }
+        for (int v = 0; v < voiceCount; ++v)
+        {
+            if (pick[v] >= 0)
+                fire (v, queue[v][pick[v]], firing);
+            const int n = due[v];
+            if (n > 0)
             {
-                for (int i = done; i < queued[v]; ++i)
-                    queue[v][i - done] = queue[v][i];
-                queued[v] -= done;
+                for (int i = n; i < queued[v]; ++i)
+                    queue[v][i - n] = queue[v][i];
+                queued[v] -= n;
             }
         }
         findNextDue();

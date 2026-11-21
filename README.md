@@ -151,7 +151,7 @@ then the effects.
 | Keys Voice | Off / a voice | see above |
 | Step | 1/8 … 1/32 with triplets | the step Sub-Step divides |
 | Vel Curve | Soft / Linear / Hard | |
-| Humanize | 0 – 100 % | each hit up to 8 ms late and up to 25 % softer, the same for the same place in the song |
+| Humanize | 0 – 100 % | each note up to 8 ms late and up to 25 % softer, its linked voices with it, the same for the same place in the song |
 
 ### Each voice
 
@@ -170,7 +170,7 @@ chain:
 | Vel Sens, Accent | 0 – 100 % | |
 | Reverb, Delay | 0 – 100 % | sends |
 | Duck | 0 – 100 % | how far the side chain (SC Source) pushes it down |
-| Choke | Off / 1 – 4 | a voice cuts the others in its group; CH and OH are both in group 1 |
+| Choke | Off / 1 – 4 | a voice cuts the others in its group; CH and OH are both in group 1. Hit on the same sample by separate notes, the group's voice that comes first in the Link list (BD, RS, SD … CH, OH …) plays and the others' hits on that sample are dropped: CH beats OH, as on the 808 and 909. Voices hit together never cut each other, so a note's linked layers all sound |
 | Mute Decay | Kit, 1 – 200 ms | the TR-1000's MUTE DCY: how fast this voice fades when choked or gated; Kit uses Choke Time |
 | Link | Off / a voice | also plays when that voice's pad plays (stack B2 under BD: the TR-1000's layers) |
 | Nudge | 0 – 80 ms | later (the TR-1000's DELAY, 0 – 3840 samples at 48 kHz) |
@@ -179,6 +179,13 @@ chain:
 | Sub-Step | 1, 2, 3, 4, 6, 8 | the hit split into this many across one Step at the host's tempo |
 | Cycle | Every, n/2, n/3, n/4, n/8, 1st Only | plays in the nth of every m bars counted from the song's top (the TR-1000's step cycle, by bars); 1st Only: the first bar after Play. Stopped, it always plays |
 | LFO Target, Wave, Rate, Depth | Tune, Decay, Cutoff, Level, Pan, Bend, Drive; sine, triangle, saw, square, random; 8 bars – 1/32 | in step with the song while it plays |
+
+Melodee gives every note of a 128-frame block (about 2.7 ms) that block's first frame, so notes close together land on
+one sample. 0.6.2 plays them as the machines would: a voice hit twice on one sample plays the louder hit once, the
+accent counted (an accent and a ghost together keep the accent; before, the later hit replaced it on the voices that
+set their level from the hit, and the resonators took both strikes), and the open hat no longer cuts a closed hat hit
+with it. Hits on different samples (flams, sub-steps, Nudge) play as before. Humanize now moves a note's linked
+voices with it; before, each drew its own lateness and softening, so a stacked kick could land up to 8 ms apart.
 
 ### Each type's own
 
@@ -205,7 +212,7 @@ at the default, the open hat about 300 ms.
 | Control | |
 |---|---|
 | Reverb Level, Time (0.3 – 12 s), Pre-Delay (0 – 200 ms), Tone, Low Cut (20 Hz – 1 kHz), Mod | eight lines in a feedback network, gently modulated |
-| Delay Level, Time (1/32 – 1/2, triplets and dotted, at the host's tempo, up to 2.6 s), Feedback, Tone, Mode (Mono / Ping-Pong / Tape), Delay > Reverb | Tape's saturating loop runs away above about 88 % Feedback, as a tape echo does: it then echoes until turned down |
+| Delay Level, Time (1/32 – 1/2, triplets and dotted, at the host's tempo, up to 2.6 s), Feedback, Tone, Mode (Mono / Ping-Pong / Tape), Delay > Reverb | Tape's saturating loop runs away above about 88 % Feedback, as a tape echo does: it then echoes until turned down. A time changed while it echoes glides there; changed while it is silent (or the tempo while stopped), the next echo comes at the new time and pitch (0.6.2: before, it glided from the old one) |
 | SC Source, SC Release | the side chain: see below |
 | Comp, Comp Attack, Comp Release, Comp Mix, Comp Key | the bus compressor: Comp sets threshold and ratio together, with makeup |
 | Analog Filter, Analog Reso, Analog Drive | the TR-1000's analog FX: one knob from a low pass (left) through off to a high pass (right), then drive |
@@ -373,12 +380,16 @@ The tests load the plug-in through the CLAP API and check:
   the 909 kick's sweep; the 808 snare's 175 Hz with its 331 Hz far under (Tone bringing it up) and the rim shot's
   455/1667 Hz; the 808 tom's falling pitch; the 808
   hats' energy above 6 kHz; the clap's four bursts 9 ms apart; the 909 metal's held words;
-- velocity, accent, choke groups and the host's choke; a voice switched to another model carrying nothing over;
+- velocity, accent, choke groups and the host's choke; hits on one sample (the louder once on the 909 and 808 kicks,
+  the closed hat whole and the open one dropped, linked layers in one group both sounding); a voice switched to
+  another model carrying nothing over;
 - the TR-1000's generator controls: Phase (the voice exactly inverted), Bend Mix (0 the dry voice), Mute Decay, an
   80 ms Nudge, the rim's O1 – O3 Tune and Decay, the toms' Detail, Attack and Tone;
-- Prob (the same twice), Cycle, 1st Only, Flam, Sub-Step, Nudge, Humanize, Link;
+- Prob (the same twice), Cycle, 1st Only, Flam, Sub-Step, Nudge, Humanize, Link, and a linked layer humanized with
+  its note;
 - the Keys voice's pitch, Tune, Kit Tune, the GM map, MIDI notes;
-- the side chain three ways; the reverb, ping-pong delay, analog filter, compressor and Limit;
+- the side chain three ways; the reverb, ping-pong delay, analog filter, compressor and Limit; the delay's time
+  turned while it sleeps (its next echo on time and at pitch, nothing from before it went quiet);
 - the same output whatever the block size (1, 37, 128, 4096 frames, settings and notes on the first frame too);
 - every voice ending when its sound does, whatever was played before (the toms' and conga's unheard second network,
   a Model switched between hits, the 909 rim's last network); pitches far past the design range (the Keys voice at

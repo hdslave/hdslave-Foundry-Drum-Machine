@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.6.1"
+#define FOUNDRY_VERSION "0.6.2"
 #endif
 
 namespace foundry
