@@ -1,0 +1,1028 @@
+// Loads Foundry.clap as a host does and checks it: description, ports, note names and the drum map Melodee reads;
+// every parameter's range, text and default; state; presets; each pad's voice in each model (sounding, bounded,
+// starting on its frame); velocity, accent, choke groups, the host's choke; Prob, Cycle, Flam, Sub-Step, Nudge,
+// Link, Humanize; the Keys voice's pitch; the GM key map; the side chain; the effects; the same output whatever the
+// block size; finite, bounded output at random and extreme settings, at 44.1, 48 and 96 kHz. Prints each voice's
+// level and length in each model, and writes demo renders as WAV files into the output folder.
+//   host Foundry.clap OUT_FOLDER
+#include "wav.h"
+
+#include <clap/clap.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <fstream>
+#include <functional>
+#include <iterator>
+#include <map>
+#include <random>
+#include <string>
+#include <vector>
+
+namespace
+{
+int failures = 0, checks = 0;
+#define CHECK(c) do { ++checks; if (! (c)) { ++failures; std::printf ("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
+#define CHECK_MSG(c, ...) do { ++checks; if (! (c)) { ++failures; std::printf ("FAIL %s:%d  %s: ", __FILE__, __LINE__, #c); std::printf (__VA_ARGS__); std::printf ("\n"); } } while (0)
+
+const clap_plugin_entry* entry = nullptr;
+const clap_plugin_factory* factory = nullptr;
+
+int rescans = 0, presetsLoaded = 0, presetErrors = 0;
+const void* hostExtension (const clap_host*, const char* id)
+{
+    static const clap_host_log log { [] (const clap_host*, clap_log_severity s, const char* m) { std::printf ("  [plug-in log %d] %s\n", (int) s, m); } };
+    static const clap_host_params params { [] (const clap_host*, clap_param_rescan_flags f) { rescans += (f & CLAP_PARAM_RESCAN_VALUES) != 0; },
+                                           [] (const clap_host*, clap_id, clap_param_clear_flags) {}, [] (const clap_host*) {} };
+    static const clap_host_preset_load presetLoad {
+        [] (const clap_host*, uint32_t, const char*, const char*, int32_t, const char*) { ++presetErrors; },
+        [] (const clap_host*, uint32_t, const char*, const char*) { ++presetsLoaded; },
+    };
+    if (std::strcmp (id, CLAP_EXT_LOG) == 0) return &log;
+    if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &params;
+    if (std::strcmp (id, CLAP_EXT_PRESET_LOAD) == 0) return &presetLoad;
+    return nullptr;
+}
+
+clap_host host {
+    CLAP_VERSION, nullptr, "Foundry test host", "tests", "", "1",
+    hostExtension, [] (const clap_host*) {}, [] (const clap_host*) {}, [] (const clap_host*) {},
+};
+
+// Input events for one process call, in time order.
+struct Events
+{
+    struct Any { union { clap_event_header header; clap_event_param_value param; clap_event_note note; clap_event_midi midi; }; };
+    std::vector<Any> list;
+    clap_input_events in { this, [] (const clap_input_events* e) { return (uint32_t) static_cast<const Events*> (e->ctx)->list.size(); },
+                           [] (const clap_input_events* e, uint32_t i) { return &static_cast<const Events*> (e->ctx)->list[i].header; } };
+    void param (uint32_t time, clap_id id, double value)
+    {
+        Any a {};
+        a.param = { { sizeof (clap_event_param_value), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, 0 }, id, nullptr, -1, -1, -1, -1, value };
+        list.push_back (a);
+    }
+    void note (uint32_t time, uint16_t type, int16_t key, double velocity)
+    {
+        Any a {};
+        a.note = { { sizeof (clap_event_note), time, CLAP_CORE_EVENT_SPACE_ID, type, 0 }, -1, 0, 0, key, velocity };
+        list.push_back (a);
+    }
+    void midi (uint32_t time, uint8_t status, uint8_t d1, uint8_t d2)
+    {
+        Any a {};
+        a.midi = { { sizeof (clap_event_midi), time, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_MIDI, 0 }, 0, { status, d1, d2 } };
+        list.push_back (a);
+    }
+    void sort() { std::stable_sort (list.begin(), list.end(), [] (const Any& a, const Any& b) { return a.header.time < b.header.time; }); }
+};
+
+struct Transport
+{
+    bool playing = false;
+    double bpm = 120.0, beats = 0.0;
+};
+
+// A note at a frame.
+struct Note
+{
+    uint64_t frame;
+    int key;
+    double velocity = 0.8;
+};
+
+struct Instance
+{
+    const clap_plugin* plugin = nullptr;
+    const clap_plugin_params* params = nullptr;
+    const clap_plugin_state* state = nullptr;
+    const clap_plugin_preset_load* presets = nullptr;
+    std::map<std::string, clap_id> ids;
+    double rate = 48000.0;
+    std::vector<float> keyL, keyR; // the SC Key port, from the last render
+
+    explicit Instance (double sampleRate = 48000.0, uint32_t maxFrames = 4096) : rate (sampleRate)
+    {
+        const auto* d = factory->get_plugin_descriptor (factory, 0);
+        plugin = factory->create_plugin (factory, &host, d->id);
+        CHECK (plugin != nullptr && plugin->init (plugin));
+        params = static_cast<const clap_plugin_params*> (plugin->get_extension (plugin, CLAP_EXT_PARAMS));
+        state = static_cast<const clap_plugin_state*> (plugin->get_extension (plugin, CLAP_EXT_STATE));
+        presets = static_cast<const clap_plugin_preset_load*> (plugin->get_extension (plugin, CLAP_EXT_PRESET_LOAD));
+        for (uint32_t i = 0; params && i < params->count (plugin); ++i)
+        {
+            clap_param_info info {};
+            params->get_info (plugin, i, &info);
+            ids[info.name] = info.id;
+        }
+        CHECK (plugin->activate (plugin, rate, 1, maxFrames));
+        CHECK (plugin->start_processing (plugin));
+    }
+    ~Instance()
+    {
+        plugin->stop_processing (plugin);
+        plugin->deactivate (plugin);
+        plugin->destroy (plugin);
+    }
+    clap_id id (const std::string& name)
+    {
+        const auto it = ids.find (name);
+        if (it == ids.end())
+        {
+            std::printf ("FAIL no parameter named \"%s\"\n", name.c_str());
+            ++failures;
+            return CLAP_INVALID_ID;
+        }
+        return it->second;
+    }
+    bool loadPreset (const char* key) { return presets != nullptr && presets->from_location (plugin, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN, nullptr, key); }
+    double value (const std::string& name)
+    {
+        double v = 0.0;
+        params->get_value (plugin, id (name), &v);
+        return v;
+    }
+    double valueOf (const std::string& name, const std::string& text)
+    {
+        double v = 0.0;
+        CHECK (params->text_to_value (plugin, id (name), text.c_str(), &v));
+        return v;
+    }
+
+    // Renders `frames` in blocks of `block`; `events(frame, n, list)` adds events for the block starting at frame.
+    void render (uint64_t frames, uint32_t block, std::vector<float>& left, std::vector<float>& right,
+                 const std::function<Transport (uint64_t)>& transport, const std::function<void (uint64_t, uint32_t, Events&)>& events = {})
+    {
+        left.assign (frames, 0.0f);
+        right.assign (frames, 0.0f);
+        keyL.assign (frames, 0.0f);
+        keyR.assign (frames, 0.0f);
+        clap_output_events out { nullptr, [] (const clap_output_events*, const clap_event_header*) { return true; } };
+        for (uint64_t at = 0; at < frames; at += block)
+        {
+            const uint32_t n = (uint32_t) std::min<uint64_t> (block, frames - at);
+            const auto t = transport (at);
+            clap_event_transport tr {};
+            tr.header = { sizeof (clap_event_transport), 0, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_TRANSPORT, 0 };
+            tr.flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_TIME_SIGNATURE | (t.beats >= 0.0 ? CLAP_TRANSPORT_HAS_BEATS_TIMELINE : 0)
+                     | (t.playing ? CLAP_TRANSPORT_IS_PLAYING : 0);
+            tr.tempo = t.bpm;
+            tr.song_pos_beats = (clap_beattime) std::llround (t.beats * (double) CLAP_BEATTIME_FACTOR);
+            tr.tsig_num = 4, tr.tsig_denom = 4;
+            Events e;
+            if (events)
+                events (at, n, e);
+            e.sort();
+            float* outs[2] = { left.data() + at, right.data() + at };
+            float* keys[2] = { keyL.data() + at, keyR.data() + at };
+            clap_audio_buffer buffers[2] {};
+            buffers[0].data32 = outs;
+            buffers[0].channel_count = 2;
+            buffers[1].data32 = keys;
+            buffers[1].channel_count = 2;
+            clap_process p {};
+            p.steady_time = (int64_t) at;
+            p.frames_count = n;
+            p.transport = &tr;
+            p.audio_outputs = buffers;
+            p.audio_outputs_count = 2;
+            p.in_events = &e.in;
+            p.out_events = &out;
+            CHECK (plugin->process (plugin, &p) != CLAP_PROCESS_ERROR);
+        }
+    }
+    // Parameter changes before anything plays: one silent, stopped block of one frame.
+    void setup (const std::vector<std::pair<std::string, double>>& values)
+    {
+        std::vector<float> l, r;
+        render (1, 1, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t, uint32_t, Events& e) {
+            for (auto& [name, v] : values)
+                e.param (0, id (name), v);
+        });
+    }
+    // Notes into a render, the transport stopped or playing from the top at `bpm`.
+    void play (uint64_t frames, const std::vector<Note>& notes, std::vector<float>& l, std::vector<float>& r, bool playing = false,
+               uint32_t block = 128, double bpm = 120.0)
+    {
+        const double perFrame = bpm / 60.0 / rate;
+        render (frames, block, l, r, [&] (uint64_t at) { return Transport { playing, bpm, playing ? (double) at * perFrame : 0.0 }; },
+                [&] (uint64_t at, uint32_t n, Events& e) {
+                    for (const auto& nt : notes)
+                        if (nt.frame >= at && nt.frame < at + n)
+                            e.note ((uint32_t) (nt.frame - at), CLAP_EVENT_NOTE_ON, (int16_t) nt.key, nt.velocity);
+                });
+    }
+};
+
+// --- Measures --------------------------------------------------------------------------------------------------
+double peakOf (const std::vector<float>& x, size_t from = 0, size_t to = SIZE_MAX)
+{
+    double p = 0.0;
+    for (size_t i = from; i < std::min (to, x.size()); ++i)
+        p = std::max (p, (double) std::fabs (x[i]));
+    return p;
+}
+double energyOf (const std::vector<float>& x, size_t from = 0, size_t to = SIZE_MAX)
+{
+    double e = 0.0;
+    for (size_t i = from; i < std::min (to, x.size()); ++i)
+        e += (double) x[i] * x[i];
+    return e;
+}
+// The first frame louder than `threshold` at or after `from`, -1 none.
+long onsetOf (const std::vector<float>& x, size_t from = 0, double threshold = 1e-4)
+{
+    for (size_t i = from; i < x.size(); ++i)
+        if (std::fabs (x[i]) > threshold)
+            return (long) i;
+    return -1;
+}
+// The frames where the sound starts again after at least `gap` frames below `threshold`.
+std::vector<long> onsetsOf (const std::vector<float>& x, double threshold, size_t gap)
+{
+    std::vector<long> found;
+    size_t quiet = gap;
+    for (size_t i = 0; i < x.size(); ++i)
+    {
+        if (std::fabs (x[i]) > threshold)
+        {
+            if (quiet >= gap)
+                found.push_back ((long) i);
+            quiet = 0;
+        }
+        else
+            ++quiet;
+    }
+    return found;
+}
+// How long until the sound stays 60 dB below its peak, seconds.
+double lengthOf (const std::vector<float>& x, double rate)
+{
+    const double p = peakOf (x);
+    if (p <= 0.0)
+        return 0.0;
+    long last = 0;
+    for (size_t i = 0; i < x.size(); ++i)
+        if (std::fabs (x[i]) > p * 1e-3)
+            last = (long) i;
+    return (double) last / rate;
+}
+// The rate the signal crosses zero upward over [from, to): a pitch estimate for a ringing tone.
+double crossingsHz (const std::vector<float>& x, size_t from, size_t to, double rate)
+{
+    int n = 0;
+    long first = -1, last = -1;
+    for (size_t i = from + 1; i < std::min (to, x.size()); ++i)
+        if (x[i - 1] <= 0.0f && x[i] > 0.0f)
+        {
+            if (first < 0) first = (long) i;
+            last = (long) i;
+            ++n;
+        }
+    return n > 1 ? (n - 1) * rate / (double) (last - first) : 0.0;
+}
+bool finiteBounded (const std::vector<float>& x, double bound)
+{
+    for (float s : x)
+        if (! std::isfinite (s) || std::fabs (s) > bound)
+            return false;
+    return true;
+}
+bool same (const std::vector<float>& a, const std::vector<float>& b)
+{
+    return a.size() == b.size() && std::memcmp (a.data(), b.data(), a.size() * sizeof (float)) == 0;
+}
+
+const char* const tags[] = { "BD", "RS", "SD", "CP", "LT", "MT", "HT", "CH", "OH", "CY", "RD", "CB", "CL", "MA", "CG", "B2" };
+const char* const models[] = { "808", "909", "606" };
+
+// Every voice silent but `keep` (its level), the effects dry.
+std::vector<std::pair<std::string, double>> solo (int keep)
+{
+    std::vector<std::pair<std::string, double>> v;
+    for (int i = 0; i < 16; ++i)
+        if (i != keep)
+            v.push_back ({ std::string (tags[i]) + " Level", -60.0 });
+    return v;
+}
+
+// --- The checks ----------------------------------------------------------------------------------------------------
+
+void testDescription()
+{
+    CHECK (factory->get_plugin_count (factory) == 1);
+    const auto* d = factory->get_plugin_descriptor (factory, 0);
+    CHECK (d != nullptr && std::strcmp (d->id, "com.hdslave.foundry") == 0);
+    CHECK (d != nullptr && std::strcmp (d->name, "hdslave Foundry") == 0);
+    bool instrument = false, drums = false;
+    for (const char* const* f = d->features; *f; ++f)
+        instrument |= std::strcmp (*f, CLAP_PLUGIN_FEATURE_INSTRUMENT) == 0, drums |= std::strcmp (*f, CLAP_PLUGIN_FEATURE_DRUM_MACHINE) == 0;
+    CHECK (instrument && drums);
+
+    Instance i;
+    const auto* audio = static_cast<const clap_plugin_audio_ports*> (i.plugin->get_extension (i.plugin, CLAP_EXT_AUDIO_PORTS));
+    CHECK (audio && audio->count (i.plugin, true) == 0 && audio->count (i.plugin, false) == 2);
+    clap_audio_port_info port {};
+    CHECK (audio && audio->get (i.plugin, 0, false, &port) && port.channel_count == 2 && (port.flags & CLAP_AUDIO_PORT_IS_MAIN));
+    CHECK (audio && audio->get (i.plugin, 1, false, &port) && port.channel_count == 2 && std::strcmp (port.name, "SC Key") == 0
+           && ! (port.flags & CLAP_AUDIO_PORT_IS_MAIN));
+    const auto* notes = static_cast<const clap_plugin_note_ports*> (i.plugin->get_extension (i.plugin, CLAP_EXT_NOTE_PORTS));
+    clap_note_port_info np {};
+    CHECK (notes && notes->count (i.plugin, true) == 1 && notes->get (i.plugin, 0, true, &np));
+    CHECK ((np.supported_dialects & CLAP_NOTE_DIALECT_MIDI) && (np.supported_dialects & CLAP_NOTE_DIALECT_CLAP));
+    const auto* names = static_cast<const clap_plugin_note_name*> (i.plugin->get_extension (i.plugin, CLAP_EXT_NOTE_NAME));
+    CHECK (names && names->count (i.plugin) == 16);
+    clap_note_name nn {};
+    CHECK (names && names->get (i.plugin, 0, &nn) && nn.key == 36 && std::strcmp (nn.name, "Bass Drum") == 0);
+    CHECK (names && names->get (i.plugin, 15, &nn) && nn.key == 51 && std::strcmp (nn.name, "Bass Drum 2") == 0);
+}
+
+// Melodee finds a drum machine's pads by a JSON map in its library: "pad_layout":"drums" and a name and a note for
+// each voice. It must be there once, with the sixteen pads on notes 36-51.
+void testDrumMap (const char* path)
+{
+    std::ifstream f (path, std::ios::binary);
+    const std::string bytes ((std::istreambuf_iterator<char> (f)), std::istreambuf_iterator<char>());
+    const size_t at = bytes.find ("{\"pad_layout\":\"drums\"");
+    CHECK (at != std::string::npos);
+    CHECK (bytes.find ("\"pad_layout\"", at + 10) == std::string::npos);
+    if (at == std::string::npos)
+        return;
+    const std::string map = bytes.substr (at, bytes.find ('\0', at) - at);
+    int notes = 0;
+    for (int k = 36; k <= 51; ++k)
+        notes += map.find ("\"note\":" + std::to_string (k) + "}") != std::string::npos;
+    CHECK (notes == 16);
+    CHECK (map.back() == '}');
+    CHECK (map.find ("\"name\":\"Closed Hat\",\"note\":43") != std::string::npos);
+}
+
+void testParameters()
+{
+    Instance i;
+    const uint32_t n = i.params->count (i.plugin);
+    CHECK (n > 600);
+    std::map<clap_id, int> idsSeen;
+    std::map<std::string, int> namesSeen;
+    for (uint32_t k = 0; k < n; ++k)
+    {
+        clap_param_info info {};
+        CHECK (i.params->get_info (i.plugin, k, &info));
+        CHECK (idsSeen[info.id]++ == 0);
+        CHECK_MSG (namesSeen[info.name]++ == 0, "%s twice", info.name);
+        CHECK (info.min_value < info.max_value);
+        CHECK (info.default_value >= info.min_value && info.default_value <= info.max_value);
+        double v = -1.0;
+        CHECK (i.params->get_value (i.plugin, info.id, &v) && v == info.default_value);
+        // Text both ways, at the ends, the default and between.
+        for (double x : { info.min_value, info.max_value, info.default_value, 0.37 * info.min_value + 0.63 * info.max_value })
+        {
+            if (info.flags & CLAP_PARAM_IS_STEPPED)
+                x = std::round (x);
+            char text[128] = {};
+            CHECK (i.params->value_to_text (i.plugin, info.id, x, text, sizeof (text)));
+            double back = 0.0;
+            CHECK_MSG (i.params->text_to_value (i.plugin, info.id, text, &back), "%s: \"%s\"", info.name, text);
+            const double tol = (info.max_value - info.min_value) * 0.01 + 1e-6;
+            // Texts round (a time to ms, Hz to whole hertz): the value comes back near.
+            CHECK_MSG (std::fabs (back - x) <= tol || (std::strcmp (text, "-inf dB") == 0 && back == info.min_value), "%s: %g -> \"%s\" -> %g",
+                       info.name, x, text, back);
+        }
+    }
+    // Rows of three for each voice: every voice's block starts with its Level.
+    uint32_t rowAt = 0;
+    for (uint32_t k = 0; k < n; ++k)
+    {
+        clap_param_info info {};
+        i.params->get_info (i.plugin, k, &info);
+        const std::string name = info.name;
+        if (name.size() > 6 && name.compare (name.size() - 6, 6, " Level") == 0 && name.find ("Reverb") == std::string::npos
+            && name.find ("Delay") == std::string::npos)
+        {
+            CHECK_MSG (k % 3 == 0, "%s at %u", info.name, k);
+            ++rowAt;
+        }
+    }
+    CHECK (rowAt == 16);
+    CHECK (i.valueOf ("BD Model", "909") == 1.0);
+    CHECK (i.valueOf ("OH Choke", "1") == 1.0);
+    CHECK (i.value ("OH Choke") == 1.0 && i.value ("CH Choke") == 1.0);
+    CHECK (std::fabs (i.valueOf ("BD Pan", "L50") + 0.5) < 1e-6);
+    CHECK (std::fabs (i.valueOf ("Analog Filter", "HP 400 Hz")) > 0.4);
+}
+
+// State: values saved and loaded, at random settings; a state with an unknown id still loads.
+void testState()
+{
+    std::vector<uint8_t> saved;
+    std::vector<std::pair<clap_id, double>> set;
+    {
+        Instance i;
+        std::mt19937 rng (7);
+        std::vector<std::pair<std::string, double>> values;
+        for (auto& [name, id] : i.ids)
+        {
+            clap_param_info info {};
+            for (uint32_t k = 0; k < i.params->count (i.plugin); ++k)
+            {
+                i.params->get_info (i.plugin, k, &info);
+                if (info.id == id)
+                    break;
+            }
+            double v = info.min_value + (info.max_value - info.min_value) * std::uniform_real_distribution<double> (0, 1) (rng);
+            if (info.flags & CLAP_PARAM_IS_STEPPED)
+                v = std::round (v);
+            values.push_back ({ name, v });
+            set.push_back ({ id, v });
+        }
+        i.setup (values);
+        clap_ostream out { &saved, [] (const clap_ostream* s, const void* d, uint64_t n) -> int64_t {
+            auto* v = static_cast<std::vector<uint8_t>*> (s->ctx);
+            v->insert (v->end(), (const uint8_t*) d, (const uint8_t*) d + n);
+            return (int64_t) n;
+        } };
+        CHECK (i.state->save (i.plugin, &out));
+    }
+    Instance j;
+    struct Reader { const std::vector<uint8_t>* bytes; size_t at; } reader { &saved, 0 };
+    clap_istream in { &reader, [] (const clap_istream* s, void* d, uint64_t n) -> int64_t {
+        auto* r = static_cast<Reader*> (s->ctx);
+        const uint64_t k = std::min<uint64_t> (n, r->bytes->size() - r->at);
+        std::memcpy (d, r->bytes->data() + r->at, k);
+        r->at += k;
+        return (int64_t) k;
+    } };
+    CHECK (j.state->load (j.plugin, &in));
+    int wrong = 0;
+    for (auto& [id, v] : set)
+    {
+        double got = 0.0;
+        j.params->get_value (j.plugin, id, &got);
+        wrong += std::fabs (got - v) > 1e-5;
+    }
+    CHECK (wrong == 0);
+    // An unknown id (from a later version) is skipped.
+    std::vector<uint8_t> odd = { 'F', 'N', 'D', 'Y', 1, 0, 0, 0, 2, 0, 0, 0 };
+    auto pair = [&] (uint32_t id, float v) {
+        const uint8_t* a = (const uint8_t*) &id;
+        const uint8_t* b = (const uint8_t*) &v;
+        odd.insert (odd.end(), a, a + 4);
+        odd.insert (odd.end(), b, b + 4);
+    };
+    pair (60000, 1.0f);
+    pair (j.id ("BD Tune"), 5.0f);
+    Reader r2 { &odd, 0 };
+    clap_istream in2 { &r2, in.read };
+    CHECK (j.state->load (j.plugin, &in2));
+    CHECK (std::fabs (j.value ("BD Tune") - 5.0) < 1e-6);
+    CHECK (j.value ("SD Level") == -2.0); // the rest back to defaults
+}
+
+void testPresets()
+{
+    const auto* discovery = static_cast<const clap_preset_discovery_factory*> (entry->get_factory (CLAP_PRESET_DISCOVERY_FACTORY_ID));
+    CHECK (discovery && discovery->count (discovery) == 1);
+    struct Found { std::vector<std::pair<std::string, std::string>> presets; int locations = 0; } found;
+    clap_preset_discovery_indexer indexer { CLAP_VERSION, "tests", "", "", "1", &found,
+        [] (const clap_preset_discovery_indexer*, const clap_preset_discovery_filetype*) { return true; },
+        [] (const clap_preset_discovery_indexer* x, const clap_preset_discovery_location*) { ++static_cast<Found*> (x->indexer_data)->locations; return true; },
+        [] (const clap_preset_discovery_indexer*, const clap_preset_discovery_soundpack*) { return true; },
+        [] (const clap_preset_discovery_indexer*, const char*) -> const void* { return nullptr; } };
+    const auto* d = discovery->get_descriptor (discovery, 0);
+    const auto* provider = discovery->create (discovery, &indexer, d->id);
+    CHECK (provider && provider->init (provider) && found.locations == 1);
+    clap_preset_discovery_metadata_receiver receiver { &found,
+        [] (const clap_preset_discovery_metadata_receiver*, int32_t, const char*) {},
+        [] (const clap_preset_discovery_metadata_receiver* r, const char* name, const char* key) {
+            static_cast<Found*> (r->receiver_data)->presets.push_back ({ name, key });
+            return true;
+        },
+        [] (const clap_preset_discovery_metadata_receiver*, const clap_universal_plugin_id*) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const char*) {},
+        [] (const clap_preset_discovery_metadata_receiver*, uint32_t) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const char*) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const char*) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const clap_timestamp, const clap_timestamp) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const char*) {},
+        [] (const clap_preset_discovery_metadata_receiver*, const char*, const char*) {} };
+    CHECK (provider && provider->get_metadata (provider, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN, nullptr, &receiver));
+    CHECK (found.presets.size() == 9);
+    if (provider)
+        provider->destroy (provider);
+
+    Instance i;
+    const int before = rescans, loads = presetsLoaded;
+    for (auto& [name, key] : found.presets)
+        CHECK_MSG (i.loadPreset (key.c_str()), "%s", key.c_str());
+    CHECK (presetsLoaded - loads == (int) found.presets.size() && rescans - before == (int) found.presets.size());
+    CHECK (! i.loadPreset ("no-such") && presetErrors == 1);
+    CHECK (i.loadPreset ("909-kit") && i.value ("BD Model") == 1.0 && i.value ("CH Model") == 1.0);
+    CHECK (i.loadPreset ("606-mods") && i.value ("SD Model") == 2.0 && i.value ("BD Tune") == -3.0 && std::fabs (i.value ("Accent") - 0.8) < 1e-6);
+    CHECK (i.loadPreset ("808-bass") && i.value ("Keys Voice") == 1.0);
+    CHECK (i.loadPreset ("default") && i.value ("BD Model") == 0.0 && i.value ("SD Model") == 1.0 && i.value ("Keys Voice") == 0.0);
+    // Each preset plays: a beat, bounded and not silent.
+    for (auto& [name, key] : found.presets)
+    {
+        Instance k;
+        k.loadPreset (key.c_str());
+        std::vector<Note> beat;
+        for (int s = 0; s < 16; ++s)
+        {
+            const uint64_t f = (uint64_t) s * 6000;
+            if (s % 4 == 0) beat.push_back ({ f, 36, 1.0 });
+            if (s % 8 == 4) beat.push_back ({ f, 38, 0.9 });
+            beat.push_back ({ f, s % 4 == 2 ? 44 : 43, 0.7 });
+        }
+        std::vector<float> l, r;
+        k.play (96000 + 48000, beat, l, r, true);
+        CHECK_MSG (finiteBounded (l, 1.0001) && finiteBounded (r, 1.0001), "%s", key.c_str());
+        CHECK_MSG (peakOf (l) > 0.1, "%s peak %g", key.c_str(), peakOf (l));
+    }
+}
+
+// Each pad plays its voice in each model: it sounds, starts on its frame, stays bounded, ends. Prints the table.
+void testVoices()
+{
+    std::printf ("  voice  model   peak   rms(50ms)  length\n");
+    for (int v = 0; v < 16; ++v)
+        for (int model = 0; model < 3; ++model)
+        {
+            Instance i;
+            auto values = solo (v);
+            values.push_back ({ std::string (tags[v]) + " Model", model });
+            i.setup (values);
+            std::vector<float> l, r;
+            i.play (48000 * 9, { { 1000, 36 + v, 0.75 } }, l, r);
+            const double peak = peakOf (l), rms = std::sqrt (energyOf (l, 1000, 1000 + 2400) / 2400.0), length = lengthOf (l, 48000.0);
+            std::printf ("  %-5s  %-5s  %5.3f   %6.4f    %5.2f s\n", tags[v], models[model], peak, rms, length - 1000.0 / 48000.0);
+            CHECK_MSG (peak > 0.05 && peak < 1.0, "%s %s peak %g", tags[v], models[model], peak);
+            CHECK_MSG (finiteBounded (l, 1.0) && finiteBounded (r, 1.0), "%s %s", tags[v], models[model]);
+            const long on = onsetOf (l, 0, 1e-6);
+            CHECK_MSG (on >= 1000 && on <= 1002, "%s %s starts at %ld", tags[v], models[model], on);
+            CHECK_MSG (peakOf (l, 0, 1000) == 0.0, "%s %s before its note", tags[v], models[model]);
+            CHECK_MSG (peakOf (l, l.size() - 4800) == 0.0, "%s %s still sounding after 9 s", tags[v], models[model]);
+        }
+}
+
+// Velocity: softer is quieter; Vel Sens 0 ignores it. Accent: at or above Accent Vel louder.
+void testVelocityAccent()
+{
+    auto peakAt = [] (double vel, std::vector<std::pair<std::string, double>> extra) {
+        Instance i;
+        auto values = solo (2);
+        values.insert (values.end(), extra.begin(), extra.end());
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (24000, { { 0, 38, vel } }, l, r);
+        return peakOf (l);
+    };
+    const double soft = peakAt (0.3, {}), loud = peakAt (0.75, {});
+    CHECK (soft < loud * 0.6);
+    CHECK (std::fabs (peakAt (0.3, { { "SD Vel Sens", 0.0 } }) - peakAt (0.75, { { "SD Vel Sens", 0.0 } })) < 1e-6);
+    const std::vector<std::pair<std::string, double>> flat = { { "SD Vel Sens", 0.0 }, { "SD Level", -12.0 }, { "Clip", 0.0 } };
+    auto with = [&] (std::pair<std::string, double> extra) { auto v = flat; v.push_back (extra); return v; };
+    const double below = peakAt (99.0 / 127.0, flat), accented = peakAt (100.0 / 127.0, flat);
+    CHECK_MSG (accented > below * 1.15, "%g %g", accented, below);
+    CHECK (std::fabs (peakAt (100.0 / 127.0, with ({ "Accent", 0.0 })) - below) < 1e-6);
+}
+
+// Choke: the closed hat cuts the open one (group 1); a voice out of the group does not; the host's choke event cuts.
+void testChoke()
+{
+    auto render = [] (std::vector<std::pair<std::string, double>> values, std::vector<Note> notes, std::vector<float>& l, bool hostChoke = false) {
+        Instance i;
+        auto base = solo (8);
+        base.push_back ({ "CH Level", -60.0 });
+        base.insert (base.end(), values.begin(), values.end());
+        i.setup (base);
+        std::vector<float> r;
+        i.render (48000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            for (const auto& nt : notes)
+                if (nt.frame >= at && nt.frame < at + n)
+                    e.note ((uint32_t) (nt.frame - at), CLAP_EVENT_NOTE_ON, (int16_t) nt.key, nt.velocity);
+            if (hostChoke && 12000 >= at && 12000 < at + n)
+                e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, 44, 0.0);
+        });
+    };
+    std::vector<float> open, choked, free, cut;
+    render ({ { "OH Decay", 0.8 } }, { { 0, 44 } }, open);
+    render ({ { "OH Decay", 0.8 } }, { { 0, 44 }, { 12000, 43 } }, choked);
+    render ({ { "OH Decay", 0.8 }, { "CH Choke", 0.0 } }, { { 0, 44 }, { 12000, 43 } }, free);
+    render ({ { "OH Decay", 0.8 } }, { { 0, 44 } }, cut, true);
+    CHECK (energyOf (open, 14400, 24000) > 1e-4);
+    CHECK (peakOf (choked, 14400) < 1e-6); // the CH is silent here (its level); the OH gone within the choke time
+    CHECK (same (std::vector<float> (open.begin(), open.end()), free));
+    CHECK (peakOf (cut, 14400) < 1e-6);
+    CHECK (same (std::vector<float> (open.begin(), open.begin() + 12000), std::vector<float> (cut.begin(), cut.begin() + 12000)));
+}
+
+// Prob, Cycle, Flam, Sub-Step, Nudge, Link and Humanize.
+void testPerformance()
+{
+    auto hits = [] (std::vector<std::pair<std::string, double>> values, int count, bool playing, int key = 37, uint64_t every = 12000) {
+        Instance i;
+        auto base = solo (1);
+        base.insert (base.end(), values.begin(), values.end());
+        i.setup (base);
+        std::vector<Note> notes;
+        for (int k = 0; k < count; ++k)
+            notes.push_back ({ (uint64_t) k * every + 600, key, 0.75 });
+        std::vector<float> l, r;
+        i.play ((uint64_t) count * every + 12000, notes, l, r, playing);
+        return l;
+    };
+    // Prob 0: nothing; 100: all; 50: some, the same twice.
+    CHECK (peakOf (hits ({ { "RS Prob", 0.0 } }, 16, true)) == 0.0);
+    const auto all = hits ({}, 16, true);
+    CHECK (onsetsOf (all, 1e-4, 2000).size() == 16);
+    const auto half1 = hits ({ { "RS Prob", 0.5 } }, 64, true), half2 = hits ({ { "RS Prob", 0.5 } }, 64, true);
+    const size_t played = onsetsOf (half1, 1e-4, 2000).size();
+    CHECK_MSG (played > 16 && played < 48, "played %zu of 64", played);
+    CHECK (same (half1, half2));
+    // Stopped, chance still applies (counted by hits).
+    const size_t stopped = onsetsOf (hits ({ { "RS Prob", 0.5 } }, 64, false), 1e-4, 2000).size();
+    CHECK (stopped > 16 && stopped < 48);
+
+    // Cycle 2/2 at 120 bpm (a bar is 96000 frames): hits in the second bar of each pair only.
+    {
+        const auto c = hits ({ { "RS Cycle", 2.0 } }, 16, true, 37, 24000); // four a bar, four bars
+        const auto on = onsetsOf (c, 1e-4, 2000);
+        CHECK (on.size() == 8);
+        bool rightBars = true;
+        for (long f : on)
+            rightBars &= ((f / 96000) % 2) == 1;
+        CHECK (rightBars);
+        // Stopped, cycles do not apply: pads play.
+        CHECK (onsetsOf (hits ({ { "RS Cycle", 2.0 } }, 8, false, 37, 24000), 1e-4, 2000).size() == 8);
+        // 1st Only: just the first bar after Play.
+        const auto first = onsetsOf (hits ({ { "RS Cycle", 18.0 } }, 16, true, 37, 24000), 1e-4, 2000);
+        CHECK (first.size() == 4 && first.back() < 96000);
+    }
+    // Flam 20 ms: a grace hit on the note (0.45 of its velocity), the main one 960 frames later, louder.
+    {
+        const auto f = hits ({ { "RS Flam", 20.0 } }, 1, true);
+        Instance g;
+        g.setup (solo (1));
+        std::vector<float> grace, r;
+        g.play (f.size(), { { 600, 37, 0.75 * 0.45 } }, grace, r, true);
+        CHECK (onsetOf (f) == 600);
+        std::vector<float> main (f.size());
+        for (size_t k = 0; k < f.size(); ++k)
+            main[k] = f[k] - grace[k];
+        CHECK_MSG (onsetOf (main, 0, 1e-7) == 600 + 960, "%ld", onsetOf (main, 0, 1e-7));
+        CHECK (peakOf (main) > peakOf (grace) * 1.5);
+    }
+    // Sub-Step 4 at Step 1/16, 120 bpm: four hits 1500 frames apart.
+    {
+        const auto s = hits ({ { "RS Sub-Step", 3.0 }, { "RS Decay", 0.0 } }, 1, true);
+        const auto on = onsetsOf (s, 1e-4, 400);
+        CHECK (on.size() == 4);
+        if (on.size() == 4)
+            CHECK (on[0] == 600 && on[1] == 2100 && on[2] == 3600 && on[3] == 5100);
+    }
+    // Nudge 10 ms: 480 frames late.
+    CHECK (onsetOf (hits ({ { "RS Nudge", 10.0 } }, 1, true)) == 600 + 480);
+    // Humanize: late (never early) by up to 8 ms, the same twice.
+    {
+        const auto a = hits ({ { "Humanize", 1.0 } }, 16, true), b = hits ({ { "Humanize", 1.0 } }, 16, true);
+        CHECK (same (a, b));
+        const auto on = onsetsOf (a, 1e-4, 2000);
+        bool late = on.size() == 16;
+        for (size_t k = 0; k < on.size(); ++k)
+            late &= on[k] >= (long) (k * 12000 + 600) && on[k] <= (long) (k * 12000 + 600 + 384);
+        CHECK (late);
+    }
+    // Link: B2 linked to BD sounds with it, the sum of the two alone.
+    {
+        auto one = [] (std::vector<std::pair<std::string, double>> values, std::vector<Note> notes) {
+            Instance i;
+            auto base = solo (-1);
+            base.push_back ({ "BD Level", 0.0 });
+            base.push_back ({ "B2 Level", -3.0 });
+            base.push_back ({ "Clip", 0.0 });
+            base.insert (base.end(), values.begin(), values.end());
+            i.setup (base);
+            std::vector<float> l, r;
+            i.play (24000, notes, l, r);
+            return l;
+        };
+        const auto both = one ({ { "B2 Link", 1.0 } }, { { 100, 36 } });
+        const auto separate = one ({}, { { 100, 36 }, { 100, 51 } });
+        double diff = 0.0;
+        for (size_t k = 0; k < both.size(); ++k)
+            diff = std::max (diff, (double) std::fabs (both[k] - separate[k]));
+        CHECK_MSG (diff < 1e-6, "linked differs by %g", diff);
+        CHECK (energyOf (both) > energyOf (one ({}, { { 100, 36 } })) * 1.2);
+    }
+}
+
+// Keys voice: notes outside the pads play the chosen voice transposed from note 60; GM key map.
+void testKeysAndMaps()
+{
+    auto pitch = [] (int key, std::vector<std::pair<std::string, double>> extra) {
+        Instance i;
+        auto values = solo (0);
+        values.insert (values.end(), { { "Keys Voice", 1.0 }, { "BD Decay", 1.0 }, { "BD Body Depth", 0.0 }, { "BD Attack", 0.0 } });
+        values.insert (values.end(), extra.begin(), extra.end());
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (48000, { { 0, key, 0.75 } }, l, r);
+        return crossingsHz (l, 4800, 48000, 48000.0);
+    };
+    const double c3 = pitch (60, {}), c4 = pitch (72, {}), pad = pitch (36, {});
+    CHECK_MSG (std::fabs (c3 - 49.0) < 1.0, "%g", c3);
+    CHECK_MSG (std::fabs (c4 / c3 - 2.0) < 0.02, "%g %g", c3, c4);
+    CHECK (std::fabs (pad - c3) < 0.5);
+    CHECK_MSG (std::fabs (pitch (36, { { "BD Tune", 12.0 } }) / c3 - 2.0) < 0.02, "tune");
+    CHECK_MSG (std::fabs (pitch (36, { { "Kit Tune", -12.0 } }) / c3 - 0.5) < 0.02, "kit tune");
+    {
+        Instance i;
+        i.setup (solo (0));
+        std::vector<float> l, r;
+        i.play (24000, { { 0, 60, 0.75 } }, l, r);
+        CHECK (peakOf (l) == 0.0); // no Keys voice: nothing
+    }
+    // GM: 42 is the closed hat, 46 the open one, 35 the second kick; in Pads 42 is the high tom.
+    for (auto [key, voice, gm] : std::vector<std::tuple<int, int, bool>> { { 42, 7, true }, { 46, 8, true }, { 35, 15, true }, { 42, 6, false } })
+    {
+        Instance i;
+        auto values = solo (voice);
+        values.push_back ({ "Key Map", gm ? 1.0 : 0.0 });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (12000, { { 0, key, 0.75 } }, l, r);
+        CHECK_MSG (peakOf (l) > 0.05, "key %d voice %d", key, voice);
+    }
+    // MIDI notes as CLAP notes.
+    {
+        Instance a, b;
+        a.setup (solo (2)), b.setup (solo (2));
+        std::vector<float> la, ra, lb, rb;
+        a.render (12000, 128, la, ra, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.note (10, CLAP_EVENT_NOTE_ON, 38, 100.0 / 127.0); });
+        b.render (12000, 128, lb, rb, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) { if (at == 0) e.midi (10, 0x90, 38, 100); });
+        CHECK (same (la, lb) && peakOf (la) > 0.05);
+    }
+}
+
+// The side chain: BD as source ducks the open hat by its Duck.
+void testSideChain()
+{
+    auto hat = [] (double duck) {
+        Instance i;
+        auto values = solo (8);
+        values.insert (values.end(), { { "BD Level", -60.0 }, { "SC Source", 1.0 }, { "OH Duck", duck }, { "OH Decay", 1.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 0.75 } }, l, r);
+        return l;
+    };
+    const auto plain = hat (0.0), ducked = hat (0.8);
+    CHECK (same (std::vector<float> (plain.begin(), plain.begin() + 12000), std::vector<float> (ducked.begin(), ducked.begin() + 12000)));
+    CHECK (energyOf (ducked, 12100, 14000) < energyOf (plain, 12100, 14000) * 0.2);
+    CHECK (energyOf (ducked, 40000, 48000) > energyOf (plain, 40000, 48000) * 0.8); // released
+
+    // The SC Key port: the kick alone (SC Source's default), before its Level, whatever else plays; silent with SC
+    // Source Off.
+    {
+        Instance a, b;
+        a.setup ({ { "BD Level", -60.0 } });
+        b.setup ({ { "SC Source", 0.0 } });
+        std::vector<float> l, r;
+        const std::vector<Note> notes = { { 0, 36, 0.9 }, { 12000, 38, 0.9 }, { 12000, 43, 0.9 } };
+        a.play (24000, notes, l, r);
+        CHECK (peakOf (a.keyL, 0, 6000) > 0.1 && same (a.keyL, a.keyR));
+        CHECK (peakOf (l, 0, 6000) < 1e-3); // muted in the mix, still keying
+        Instance solo0;
+        auto alone = solo (0);
+        alone.push_back ({ "Clip", 0.0 });
+        solo0.setup (alone);
+        std::vector<float> l0, r0;
+        solo0.play (24000, { { 0, 36, 0.9 } }, l0, r0);
+        CHECK (same (a.keyL, solo0.keyL)); // the snare and hat are not in it
+        double diff = 0.0;
+        for (size_t k = 0; k < l0.size(); ++k)
+            diff = std::max (diff, (double) std::fabs (l0[k] - solo0.keyL[k]));
+        CHECK_MSG (diff < 1e-6, "key differs from the solo kick at 0 dB by %g", diff);
+        b.play (24000, notes, l, r);
+        CHECK (peakOf (b.keyL) == 0.0);
+    }
+    // Comp Key: SC Source: the kick keys the bus compressor; the hat dips under it though the kick is muted.
+    auto keyed = [] (double key) {
+        Instance i;
+        auto values = solo (8);
+        values.insert (values.end(), { { "BD Level", -60.0 }, { "OH Decay", 1.0 }, { "Comp", 0.8 }, { "Comp Key", key }, { "Comp Attack", 0.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (48000, { { 0, 44, 0.75 }, { 12000, 36, 1.0 } }, l, r);
+        return l;
+    };
+    const auto mixKeyed = keyed (0.0), kickKeyed = keyed (1.0);
+    CHECK (energyOf (kickKeyed, 12200, 16000) < energyOf (mixKeyed, 12200, 16000) * 0.5);
+    CHECK (energyOf (kickKeyed, 1000, 11000) <= energyOf (mixKeyed, 1000, 11000) * 1.0001); // keyed, no makeup lift
+}
+
+// The effects: reverb and delay tails, the analog filter darkening, the compressor, Clip.
+void testEffects()
+{
+    auto clap = [] (std::vector<std::pair<std::string, double>> values) {
+        Instance i;
+        auto base = solo (3);
+        base.insert (base.end(), values.begin(), values.end());
+        i.setup (base);
+        std::vector<float> l, r;
+        i.play (96000, { { 0, 39, 0.75 } }, l, r, true);
+        return std::make_pair (l, r);
+    };
+    const auto dry = clap ({});
+    const auto wet = clap ({ { "CP Reverb", 0.6 }, { "Reverb Time", 0.6 } });
+    CHECK (energyOf (wet.first, 48000, 96000) > 1e3 * energyOf (dry.first, 48000, 96000) + 1e-6);
+    CHECK (! same (wet.first, wet.second)); // a stereo tail
+    const auto echo = clap ({ { "CP Delay", 0.6 }, { "Delay Time", 8.0 }, { "Delay Feedback", 0.5 } }); // 1/4: 24000 frames
+    CHECK (peakOf (echo.first, 23000, 30000) > 0.1 * peakOf (dry.first));
+    // Ping-pong: the first echo left only, the second right.
+    CHECK_MSG (peakOf (echo.second, 23000, 30000) < 1e-3, "%g", peakOf (echo.second, 23000, 30000));
+    CHECK_MSG (peakOf (echo.second, 47000, 54000) > 0.005, "%g", peakOf (echo.second, 47000, 54000));
+    const auto dark = clap ({ { "Analog Filter", -0.8 } });
+    CHECK (energyOf (dark.first) < energyOf (dry.first) * 0.5);
+    const auto squashed = clap ({ { "Comp", 1.0 }, { "CP Level", 6.0 } });
+    CHECK (finiteBounded (squashed.first, 1.0));
+    const auto limited = clap ({ { "CP Level", 6.0 }, { "Clip", 2.0 }, { "Volume", 6.0 } });
+    CHECK (peakOf (limited.first) <= 0.98 + 1e-6);
+}
+
+// The same output whatever the block size, with notes, knob moves, an LFO, flams, sub-steps and the effects.
+void testBlockSizes()
+{
+    auto run = [] (uint32_t block) {
+        Instance i;
+        i.setup ({ { "BD LFO Target", 1.0 }, { "BD LFO Depth", 0.4 }, { "SD Flam", 15.0 }, { "CH Sub-Step", 2.0 }, { "CP Reverb", 0.5 },
+                   { "OH Delay", 0.4 }, { "Comp", 0.5 }, { "SC Source", 1.0 }, { "CH Duck", 0.6 }, { "Analog Filter", -0.4 },
+                   { "LT Flt Type", 1.0 }, { "LT Flt Env", 0.6 }, { "MT Bend", 0.6 }, { "MT Bend Type", 0.8 }, { "Humanize", 0.5 } });
+        std::vector<float> l, r;
+        i.render (48000 * 3, block, l, r, [&] (uint64_t at) { return Transport { true, 120.0, (double) at * 2.0 / 48000.0 }; },
+                  [&] (uint64_t at, uint32_t n, Events& e) {
+                      for (uint64_t f = 0; f < 48000 * 3; f += 3000)
+                          if (f >= at && f < at + n)
+                          {
+                              const int step = (int) (f / 3000);
+                              const uint32_t t = (uint32_t) (f - at);
+                              e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) (36 + (step * 7) % 16), 0.5 + 0.1 * (step % 5));
+                              if (step % 4 == 0) e.note (t, CLAP_EVENT_NOTE_ON, 36, 1.0);
+                              if (step % 3 == 0) e.param (t, i.id ("SD Tune"), (double) (step % 7) - 3.0);
+                          }
+                  });
+        return l;
+    };
+    const auto a = run (128);
+    for (uint32_t b : { 1u, 37u, 4096u })
+        CHECK_MSG (same (a, run (b)), "block %u", b);
+
+    // Settings and notes on the very first frame, playing from the top (as the fingerprint sends them).
+    auto first = [] (uint32_t block, std::vector<float>& key) {
+        Instance i;
+        std::vector<float> l, r;
+        const std::vector<std::pair<std::string, double>> values = { { "CP Reverb", 0.4 }, { "OH Delay", 0.3 }, { "SD Flam", 12.0 },
+                                                                     { "CH Sub-Step", 1.0 }, { "BD LFO Target", 1.0 }, { "BD LFO Depth", 0.3 } };
+        i.render (48000 * 3, block, l, r, [&] (uint64_t at) { return Transport { true, 120.0, (double) at * 2.0 / 48000.0 }; },
+                  [&] (uint64_t at, uint32_t n, Events& e) {
+                      if (at == 0)
+                          for (auto& [name, v] : values)
+                              e.param (0, i.id (name), v);
+                      for (uint64_t f = 0; f < 48000 * 3; f += 6000)
+                          if (f >= at && f < at + n)
+                          {
+                              e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) (36 + (f / 6000) % 16), 0.8);
+                              e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, 43, 0.6);
+                          }
+                  });
+        key = i.keyL;
+        return l;
+    };
+    std::vector<float> k128, kb;
+    const auto f128 = first (128, k128);
+    for (uint32_t b : { 1u, 37u, 4096u })
+    {
+        const auto fb = first (b, kb);
+        long at = -1;
+        for (size_t k = 0; k < f128.size() && at < 0; ++k)
+            if (f128[k] != fb[k])
+                at = (long) k;
+        CHECK_MSG (at < 0 && same (k128, kb), "block %u: first difference at frame %ld", b, at);
+    }
+}
+
+// Random and extreme settings: finite and bounded (Clip on), at three rates.
+void testExtremes()
+{
+    std::mt19937 rng (11);
+    for (double rate : { 44100.0, 48000.0, 96000.0 })
+        for (int trial = 0; trial < 12; ++trial)
+        {
+            Instance i (rate);
+            std::vector<std::pair<std::string, double>> values;
+            for (uint32_t k = 0; k < i.params->count (i.plugin); ++k)
+            {
+                clap_param_info info {};
+                i.params->get_info (i.plugin, k, &info);
+                double u = std::uniform_real_distribution<double> (0, 1) (rng);
+                if (trial % 3 == 1) u = u < 0.5 ? 0.0 : 1.0; // the ends
+                double v = info.min_value + (info.max_value - info.min_value) * u;
+                if (info.flags & CLAP_PARAM_IS_STEPPED) v = std::round (v);
+                if (std::strcmp (info.name, "Clip") == 0) v = 1.0 + (trial % 2);
+                if (std::strcmp (info.name, "Volume") == 0) v = std::min (v, 0.0);
+                values.push_back ({ info.name, v });
+            }
+            i.setup (values);
+            std::vector<Note> notes;
+            for (int k = 0; k < 64; ++k)
+                notes.push_back ({ (uint64_t) (k * rate / 16.0), 36 + (int) (rng() % 64), 0.2 + 0.8 * std::uniform_real_distribution<double> (0, 1) (rng) });
+            std::vector<float> l, r;
+            i.play ((uint64_t) (rate * 5.0), notes, l, r, true);
+            CHECK_MSG (finiteBounded (l, 1.0) && finiteBounded (r, 1.0), "rate %g trial %d", rate, trial);
+        }
+}
+
+// Silence costs nothing and stays silence: no notes, zeros.
+void testSilence()
+{
+    Instance i;
+    std::vector<float> l, r;
+    i.play (48000, {}, l, r, true);
+    CHECK (peakOf (l) == 0.0 && peakOf (r) == 0.0);
+}
+
+void writeDemos (const std::string& folder)
+{
+    for (const char* key : { "default", "808-kit", "909-kit", "606-kit", "606-mods", "bent-808", "techno-909", "808-bass", "big-room" })
+    {
+        Instance i;
+        i.loadPreset (key);
+        std::vector<Note> notes;
+        const uint64_t step = 6000; // 1/16 at 120 bpm
+        for (int bar = 0; bar < 2; ++bar)
+            for (int s = 0; s < 16; ++s)
+            {
+                const uint64_t f = (uint64_t) (bar * 16 + s) * step;
+                if (s % 4 == 0 || s == 14) notes.push_back ({ f, 36, s == 0 ? 1.0 : 0.85 });
+                if (s == 4 || s == 12) notes.push_back ({ f, 38, 0.9 });
+                if (s == 12 && bar == 1) notes.push_back ({ f, 39, 0.9 });
+                notes.push_back ({ f, s % 4 == 2 ? 44 : 43, s % 2 ? 0.55 : 0.8 });
+                if (s == 10) notes.push_back ({ f, 47, 0.7 });
+                if (bar == 1 && s >= 12) notes.push_back ({ f, 40 + (s - 12) % 3, 0.8 });
+                if (std::strcmp (key, "808-bass") == 0 && s % 8 == 0) notes.push_back ({ f, s == 0 ? 60 : 63, 0.9 });
+            }
+        notes.push_back ({ step * 32, 45, 0.9 });
+        notes.push_back ({ step * 32, 36, 1.0 });
+        std::vector<float> l, r;
+        i.play (step * 32 + 96000, notes, l, r, true);
+        writeWav ((folder + "/demo-" + key + ".wav").c_str(), l, r, 48000);
+    }
+}
+} // namespace
+
+int main (int argc, char** argv)
+{
+    if (argc < 3)
+    {
+        std::printf ("usage: host Foundry.clap OUT_FOLDER\n");
+        return 2;
+    }
+    void* lib = dlopen (argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (lib == nullptr)
+    {
+        std::printf ("FAIL dlopen: %s\n", dlerror());
+        return 1;
+    }
+    entry = static_cast<const clap_plugin_entry*> (dlsym (lib, "clap_entry"));
+    if (entry == nullptr || ! entry->init (argv[1]))
+    {
+        std::printf ("FAIL clap_entry\n");
+        return 1;
+    }
+    factory = static_cast<const clap_plugin_factory*> (entry->get_factory (CLAP_PLUGIN_FACTORY_ID));
+
+    testDescription();
+    testDrumMap (argv[1]);
+    testParameters();
+    testState();
+    testPresets();
+    testVoices();
+    testVelocityAccent();
+    testChoke();
+    testPerformance();
+    testKeysAndMaps();
+    testSideChain();
+    testEffects();
+    testBlockSizes();
+    testExtremes();
+    testSilence();
+    writeDemos (argv[2]);
+
+    entry->deinit();
+    std::printf ("%d checks, %d failed\n", checks, failures);
+    return failures == 0 ? 0 : 1;
+}
