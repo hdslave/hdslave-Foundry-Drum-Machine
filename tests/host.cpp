@@ -399,24 +399,6 @@ void testScreen()
         ui->knobs (i.plugin, ids.data());
         return ids;
     };
-    std::set<clap_id> available;
-    for (int pad = 0; pad < 16; ++pad)
-    {
-        const int v = std::find (padOfVoice, padOfVoice + 16, pad) - padOfVoice;
-        const std::string tag = tags[v];
-        const auto first = knobs();
-        CHECK (first[0] == i.id (tag+" Level") && first[1] == i.id (tag+" Tune") && first[2] == i.id (tag+" Decay"));
-        int banks = 0;
-        do
-        {
-            for (clap_id id : knobs()) if (id != CLAP_INVALID_ID) available.insert (id);
-            CHECK (input (MELODEE_SCREEN_NUDGE, 1));
-        } while (++banks < 40 && knobs() != first);
-        CHECK (banks < 40);
-        CHECK (input (MELODEE_SCREEN_WHEEL, 1));
-    }
-    for (const auto& p : i.ids) CHECK (available.count (p.second) == 1);
-    CHECK (!input (99, 0));
     const uint32_t guard = 0x12345678, stride = 325;
     std::vector<uint32_t> pixels (stride*218 + 2, guard);
     melodee_screen_canvas c {};
@@ -431,6 +413,51 @@ void testScreen()
         CHECK (std::all_of (c.pixels+y*stride+320, c.pixels+(y+1)*stride, [=] (uint32_t p) { return p == guard; }));
     }
     CHECK (pixels.front() == guard && pixels.back() == guard);
+    // Check the actual ink on every bank, including long names and values with descenders.
+    // Exercise the rail at both ends and in the middle beside the diagonal card dividers.
+    c.knobs[0] = { 0, false };
+    c.knobs[1] = { 64, true };
+    c.knobs[2] = { 127, true };
+    const uint32_t silver = c.pixels[184 * stride];
+    auto clearBand = [&] (int x, int y, int width, int height) {
+        for (int j = 0; j < height; ++j)
+        {
+            const auto* row = c.pixels + (y + j) * stride + x;
+            if (!std::all_of (row, row + width, [=] (uint32_t pixel) { return pixel == silver; })) return false;
+        }
+        return true;
+    };
+    std::set<clap_id> available;
+    for (int pad = 0; pad < 16; ++pad)
+    {
+        const int v = std::find (padOfVoice, padOfVoice + 16, pad) - padOfVoice;
+        const std::string tag = tags[v];
+        const auto first = knobs();
+        CHECK (first[0] == i.id (tag+" Level") && first[1] == i.id (tag+" Tune") && first[2] == i.id (tag+" Decay"));
+        int banks = 0;
+        do
+        {
+            CHECK (paint());
+            const auto ids = knobs();
+            for (int k = 0; k < 3; ++k)
+            {
+                if (ids[k] == CLAP_INVALID_ID) continue;
+                available.insert (ids[k]);
+                const int x = 10 + k * 106;
+                CHECK (!clearBand (x + 21, 185, 73, 9)); // label
+                CHECK (clearBand (x, 194, 94, 4));
+                CHECK (!clearBand (x, 198, 91, 14)); // value
+                CHECK (clearBand (x, 212, 94, 1));
+            }
+            CHECK (clearBand (0, 215, 320, 3)); // place bar
+            CHECK (input (MELODEE_SCREEN_NUDGE, 1));
+        } while (++banks < 40 && knobs() != first);
+        CHECK (banks < 40);
+        CHECK (input (MELODEE_SCREEN_WHEEL, 1));
+    }
+    for (const auto& p : i.ids) CHECK (available.count (p.second) == 1);
+    CHECK (!input (99, 0));
+    for (auto& k : c.knobs) k = { -1, false };
     CHECK (input (MELODEE_SCREEN_WHEEL, 1)); // A02, snare
     CHECK (paint());
     const auto idle = pixels;

@@ -84,18 +84,24 @@ struct Paper
             for (int i = 0; i < w; ++i) dst[i] = art::palette[src[i]];
         }
     }
-    void text (int x, int y, const char* s, uint32_t ink, int scale = 1, int limit = 320, bool upper = false) const
+    void text (int x, int y, const char* s, uint32_t ink, int limit = 320, bool upper = false,
+               int advance = hdui::font::glyphWidth) const
     {
-        const int natural = int (std::strlen (s)) * 7 * scale;
+        constexpr int glyphWidth = hdui::font::glyphWidth;
+        const int natural = int (std::strlen (s)) * advance;
         const int width = std::min (natural, limit);
         for (int dx = 0; dx < width; ++dx)
         {
-            const int column = dx * natural / width / scale;
-            int ch = (unsigned char) s[column / 7];
+            const int column = dx * natural * glyphWidth / (width * advance);
+            int ch = (unsigned char) s[column / glyphWidth];
             if (upper) ch = std::toupper (ch);
             const auto& glyph = hdui::font::glyphs[(ch >= 32 && ch <= 127 ? ch : '?') - 32];
-            for (int row = 0; row < 12; ++row)
-                if (glyph[row] & (1 << (column % 7))) box (x + dx, y + row*scale, 1, scale, ink);
+            for (int row = 0; row < hdui::font::glyphHeight; ++row)
+                if (glyph[row] & (1 << (column % glyphWidth)))
+                {
+                    const int top = row * advance / glyphWidth;
+                    box (x + dx, y + top, 1, (row + 1) * advance / glyphWidth - top, ink);
+                }
         }
     }
 };
@@ -195,7 +201,7 @@ struct Screen
         char number[16];
         std::snprintf (number, sizeof number, "A%02d", pad+1);
         g.text (7, 41, number, acid);
-        g.text (32, 41, voiceSpecs[voice()].name, paper, 1, 99, true);
+        g.text (32, 41, voiceSpecs[voice()].name, paper, 99, true);
         for (int p = 0; p < voiceCount; ++p)
         {
             const int x = 7 + (p%4)*31, y = 54 + (3-p/4)*18;
@@ -233,25 +239,27 @@ struct Screen
         for (int k = 0; k < 3; ++k)
         {
             if (ids[k] == CLAP_INVALID_ID) continue;
-            const int idx = paramIndex (ids[k]), x = 7 + k*106;
+            const int idx = paramIndex (ids[k]), x = 10 + k*106;
             const auto& p = table().rows[idx];
             const float value = values[idx].load (std::memory_order_relaxed);
             const char* name = p.name;
             if (ids[k] >= voiceIdBase) name += std::strlen (voiceSpecs[voice()].tag) + 1;
             const char key[] = { 'K', char ('1'+k), 0 };
-            g.box (x, 188, 17, 10, night);
-            g.text (x+1, 189, key, c.knobs[k].engaged ? acid : paper);
-            g.text (x+20, 189, name, night, 1, 78, true);
+            // Keep four clear rows (194–197) between the badges and values. Even a
+            // descender in "Ping-Pong" clears the pot rail and Melodee's bottom place bar.
+            g.box (x, 185, 17, 9, night);
+            g.text (x+1, 186, key, c.knobs[k].engaged ? acid : paper);
+            g.text (x+21, 185, name, night, 73, true);
             char buf[48];
             formatParam (p, value, buf, sizeof buf);
             if (bank == 0 && std::round (value) == value && (p.unit == Unit::db || p.unit == Unit::semitones) && value > silentDb)
                 std::snprintf (buf, sizeof buf, "%.0f %s", value, p.unit == Unit::db ? "dB" : "st");
-            g.text (x+4, 198, buf, night, 2, 93);
+            g.text (x, 198, buf, night, 91, false, 10);
             if (c.knobs[k].position >= 0)
             {
-                g.box (x+2, 215, 92, 1, 0xff8596a0);
+                g.box (x, 214, 91, 1, 0xff8596a0);
                 const int knob = std::clamp<int> (c.knobs[k].position, 0, 127);
-                g.box (x+2+knob*90/127, 214, 2, 2, c.knobs[k].engaged ? night : 0xff477c93);
+                g.box (x+knob*89/127, 213, 2, 2, c.knobs[k].engaged ? night : 0xff477c93);
             }
         }
     }
