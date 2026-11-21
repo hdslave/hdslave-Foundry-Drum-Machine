@@ -131,11 +131,13 @@ then the effects.
 
 ### Each voice
 
-Every voice has Level, Tune (±24 st), Decay, its type's own controls (below), Model, Pan, and the shared chain:
+Every voice has Level, Tune (±24 st), Decay, its type's own controls (below), Model, Pan, Phase, and the shared
+chain:
 
 | Control | Range | |
 |---|---|---|
-| Bend Type, Bend | 0 – 100 % | the TR-1000's Reformer: four characters in a row (fold, rectify, crush, decimate), Bend Type the place between them, Bend the depth |
+| Phase | Normal / Inverse | the TR-1000's PHASE: the voice upside down, for layering against another |
+| Bend Type, Bend, Bend Mix | 0 – 100 % | the TR-1000's Reformer (RFM TYP, RFM DEP, REFORMER): four characters in a row (fold, rectify, crush, decimate), Bend Type the place between them, Bend the depth, Bend Mix how much of it is heard |
 | Drive | 0 – 100 % | |
 | Flt Type, Cutoff, Reso | Off / LP / HP / BP, 20 Hz – 20 kHz | |
 | Flt Env, Flt Decay | ±6 octaves, 5 ms – 2 s | the filter's envelope, from each hit |
@@ -145,8 +147,9 @@ Every voice has Level, Tune (±24 st), Decay, its type's own controls (below), M
 | Reverb, Delay | 0 – 100 % | sends |
 | Duck | 0 – 100 % | how far the side chain (SC Source) pushes it down |
 | Choke | Off / 1 – 4 | a voice cuts the others in its group; CH and OH are both in group 1 |
+| Mute Decay | Kit, 1 – 200 ms | the TR-1000's MUTE DCY: how fast this voice fades when choked or gated; Kit uses Choke Time |
 | Link | Off / a voice | also plays when that voice's pad plays (stack B2 under BD: the TR-1000's layers) |
-| Nudge | 0 – 50 ms | later |
+| Nudge | 0 – 80 ms | later (the TR-1000's DELAY, 0 – 3840 samples at 48 kHz) |
 | Prob | 0 – 100 % | how likely each hit plays; the same hits drop when the same part of the song plays again |
 | Flam | Off, 1 – 60 ms | a grace hit at 45 % of the velocity, then the hit this much later |
 | Sub-Step | 1, 2, 3, 4, 6, 8 | the hit split into this many across one Step at the host's tempo |
@@ -161,8 +164,8 @@ The TR-1000 names where it has the control; *new* where it does not.
 |---|---|
 | Kick | Attack (808: how far the attack raises the centre; 909: the click's level, its ATTACK; 606: the click network's level), Tone (808: the TONE pot, a low pass over the output; 909 and 606: the click's brightness), Body Depth (808: the sigh's depth; 909: the sweep's depth, its TUNE, 9X P.AMOUNT; 8X BODY DEPTH), Body Decay (808: the glide's time, 1 – 10 ms; 909: the sweep's time, 4 – 34 ms, the machine's TUNE, 9X P.DECAY; 606: the glide and the click's length), Excite (the 8X EXCITE: odd harmonics; on the 909 it overdrives the shaper) |
 | Snare | Tone (808: the fundamental/harmonic balance; 909: the noise's low pass), Snappy, Snappy Decay, Detune, Osc Mix, Pitch Env, Pitch Decay, Freq Mod |
-| Tom, Conga | Color, Color Tone, Color Decay, Pitch Env, Pitch Decay (*new* on toms), Detune, Osc Mix, Shape |
-| Rim | Tone, Body, Noise, Freq Mod, Click (*new*) |
+| Tom, Conga | Color, Color Tone, Color Decay, Pitch Env, Pitch Decay (*new* on toms), Detune, Osc Mix, Shape, Detail (the 9X tom's: its highs brought out), Attack (*new*: the stick's click), Tone (*new*: a low pass below 0, a high pass above) |
+| Rim | Tone, Body, Noise, Freq Mod, Click (*new*), O1 – O3 Tune and O1 – O3 Decay (the 9X rim's: each network's pitch, an octave either way, and its ring, ×¼ to ×4; 50 % as it is; O3 is the 909 style's third) |
 | Clap | Claps, Speed, Clap Decay, Mix, Filter, Nuance, Size (the 808's CLAP SIZE: thicker or thinner), Tail Tone (*new*) |
 | Hat | Tone, Sculpt, XMod, Blend, Detune, Amp Mod, Error (909: bits below 6; 808 and 606: grit added), Noise (*new*) |
 | Cymbal | Tone, Sculpt, Filter, Blend, Detune, Amp Mod, Error, Noise (*new*) |
@@ -223,6 +226,31 @@ control.
 | Techno 909 | 909 with the kick keying the ducking, the bus compressor, delay and reverb sends, analog drive |
 | 808 Bass Keys | 808 with the kick as the Keys voice: a bass line on bank B and up |
 | Big Room | 909 with a gated, reverbed snare, swept toms in the reverb, a longer reverb |
+
+## The TR-8S's and TR-1000's drum parameters
+
+Every sound parameter the TR-1000 gives its analog and ACB (8X, 9X) generators and its 606 models is here, by the
+names in the table below; the TR-8S's analog-modelled tones have a subset of them (Tune, Decay, BD Attack, SD
+Snappy, Tom Color). Effects, sends and routing are left to the host.
+
+| TR-1000 (and TR-8S) | Foundry |
+|---|---|
+| TUNE, COARSE (every generator) | Tune, ±24 st |
+| DECAY; OSC DCY (snares); TAIL DCY (clap) | Decay |
+| PHASE; DELAY (0 – 3840 samples) | Phase; Nudge |
+| MUTE TRG; MUTE DCY (808 OH) | Choke; Mute Decay |
+| 808 BD TONE, 8X BD ATTACK, 909 and 9X BD ATTACK, 606 BD ATTACK | Kick Attack (and Tone, the 808's TONE pot) |
+| 8X BD BODY DEP, BODY DCY, EXCITE; 909 BD TUNE, 9X P. AMOUNT, P. DECAY, DRIVE | Kick Body Depth, Body Decay, Excite |
+| RFM TYP, REFORMER, RFM DEP (8X BD, SD, toms) | Bend Type, Bend Mix, Bend |
+| SD TONE, SNAPPY, SNPY DCY, DETUNE, OSC MIX, P.ENV, P. DECAY, FREQ MOD | Snare Tone, Snappy, Snappy Decay, Detune, Osc Mix, Pitch Env, Pitch Decay, Freq Mod |
+| Tom COLOR, COLR TON, COLR DCY, DETUNE, OSC MIX, DETAIL, SHAPE | Tom Color, Color Tone, Color Decay, Detune, Osc Mix, Detail, Shape |
+| RS TONE, BODY, NOISE, FREQ MOD, O1 – O3 TUNE, O1 – O3 DECAY | Rim Tone, Body, Noise, Freq Mod, O1 – O3 Tune, O1 – O3 Decay |
+| HC CLP SIZE, TAIL LVL, FILTER, CLAPS, SPEED, MIX, CLAP DCY | Clap Size, Mix, Filter, Claps, Speed, Clap Decay |
+| CH/OH TONE, SCULPT, XMOD, BLEND, DETUNE, AMP MOD; 9X ERROR | Hat Tone, Sculpt, XMod, Blend, Detune, Amp Mod, Error |
+| Crash TONE, SCULPT, FILTER, BLEND, DETUNE, AMP MOD | Cymbal Tone, Sculpt, Filter, Blend, Detune, Amp Mod |
+| CB DETUNE, UNISON, OSC MIX, XMOD, NOISE, RATIO, SHAPE | Cowbell Detune, Unison, Osc Mix, XMod, Noise, Ratio, Shape |
+| Maracas ATTACK; claves and congas TUNE, DECAY | Maracas Attack; Tune, Decay |
+| MODEL (TR-8, TR-08, 8 LONG, TR-09, ATTACK, LOW; LOW/MID/HIGH/FULL) | Model (808 / 909 / 606); the variants are reached with Decay, Attack and Tune |
 
 ## Where it differs from the TR-1000, and what is left out
 
@@ -287,8 +315,8 @@ Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 598,000 | 12.5 % |
-| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 138,000 | 2.9 % |
+| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 607,000 | 12.6 % |
+| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 139,000 | 2.9 % |
 | Stopped | about 3,800 | 0.08 % |
 
 A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. A
@@ -318,6 +346,8 @@ The tests load the plug-in through the CLAP API and check:
   455/1667 Hz; the 808 tom's falling pitch; the 808
   hats' energy above 6 kHz; the clap's four bursts 9 ms apart; the 909 metal's held words;
 - velocity, accent, choke groups and the host's choke; a voice switched to another model carrying nothing over;
+- the TR-1000's generator controls: Phase (the voice exactly inverted), Bend Mix (0 the dry voice), Mute Decay, an
+  80 ms Nudge, the rim's O1 – O3 Tune and Decay, the toms' Detail, Attack and Tone;
 - Prob (the same twice), Cycle, 1st Only, Flam, Sub-Step, Nudge, Humanize, Link;
 - the Keys voice's pitch, Tune, Kit Tune, the GM map, MIDI notes;
 - the side chain three ways; the reverb, ping-pong delay, analog filter, compressor and Limit;

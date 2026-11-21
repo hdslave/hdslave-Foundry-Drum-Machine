@@ -15,7 +15,7 @@ inline float clampf (float x, float lo, float hi) { return std::fmin (std::fmax 
 
 // 2^x to about 3e-6 relative: the integer part by rounding, the rest a polynomial over [-0.5, 0.5]. For pitch and
 // cutoff, whose octaves stay within +-30; decays use exp (they sit so near 1 that this error would show).
-inline float exp2Fast (float x)
+[[gnu::always_inline]] inline float exp2Fast (float x)
 {
     const float xi = std::rint (x), f = x - xi;
     const float p = 1.0f + f * (0.69314718f + f * (0.24022651f + f * (0.05550411f + f * (0.00961813f + f * 0.00133336f))));

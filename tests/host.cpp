@@ -747,6 +747,113 @@ void testModelSwitch()
     CHECK_MSG (b > 1e-6 && a < 1.25 * b && a > 0.8 * b, "switched %.4g, fresh %.4g", a, b);
 }
 
+// The TR-1000's generator controls Foundry adds in 0.5.0: Phase, the reformer's amount (Bend Mix), Mute Decay, the
+// start delay (Nudge to 80 ms), the 909 rim's O1-O3 Tune and Decay, the 909 tom's Detail; and the toms' Attack and
+// Tone.
+void testGeneratorControls()
+{
+    auto alone = [] (int voice, int model, std::vector<std::pair<std::string, double>> extra, uint64_t frames = 24000) {
+        Instance i;
+        auto values = solo (voice);
+        values.insert (values.end(), { { std::string (tags[voice]) + " Model", (double) model }, { "Clip", 0.0 } });
+        values.insert (values.end(), extra.begin(), extra.end());
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (frames, { { 0, 36 + voice, 0.75 } }, l, r);
+        return l;
+    };
+    // A four-pole split at `hz`: the energy above it (or below it).
+    auto split = [] (const std::vector<float>& x, size_t from, size_t to, double hz, bool high) {
+        const double a = 1.0 - std::exp (-2.0 * M_PI * hz / 48000.0);
+        double lp[4] {}, e = 0.0;
+        for (size_t i = 0; i < std::min (to, x.size()); ++i)
+        {
+            double y = x[i];
+            for (auto& s : lp)
+            {
+                s += (y - s) * a;
+                y = high ? y - s : s;
+            }
+            if (i >= from)
+                e += y * y;
+        }
+        return e;
+    };
+    // Phase: Inverse is the same voice upside down, bit for bit.
+    {
+        const auto normal = alone (0, 0, {}), inverse = alone (0, 0, { { "BD Phase", 1.0 } });
+        bool flipped = peakOf (normal) > 0.1;
+        for (size_t k = 0; k < normal.size(); ++k)
+            flipped = flipped && inverse[k] == -normal[k];
+        CHECK (flipped);
+    }
+    // Bend Mix: at 0 the bend is out (the dry voice), at 100 % all of it, half way between.
+    {
+        const auto dry = alone (2, 0, {});
+        const auto none = alone (2, 0, { { "SD Bend", 1.0 }, { "SD Bend Type", 0.0 }, { "SD Bend Mix", 0.0 } });
+        const auto full = alone (2, 0, { { "SD Bend", 1.0 }, { "SD Bend Type", 0.0 } });
+        const auto half = alone (2, 0, { { "SD Bend", 1.0 }, { "SD Bend Type", 0.0 }, { "SD Bend Mix", 0.5 } });
+        CHECK (same (dry, none));
+        CHECK (! same (dry, full) && ! same (full, half) && ! same (dry, half));
+    }
+    // Mute Decay: the open hat cut by the closed hat at 12000 fades over its own 200 ms instead of the kit's ~11 ms.
+    {
+        auto cut = [] (double mute) {
+            Instance i;
+            auto values = solo (8);
+            values.insert (values.end(), { { "CH Level", -60.0 }, { "OH Decay", 0.8 }, { "OH Mute Decay", mute } });
+            i.setup (values);
+            std::vector<float> l, r;
+            i.play (36000, { { 0, 44, 0.8 }, { 12000, 43, 0.8 } }, l, r);
+            return l;
+        };
+        const auto kit = cut (0.0), slow = cut (1.0);
+        CHECK (peakOf (kit, 14400) < 1e-6);
+        CHECK (energyOf (slow, 14400, 19200) > 1e-4 && peakOf (slow, 33600) < 1e-3);
+    }
+    // Nudge reaches 80 ms: 3840 frames at 48 kHz, the TR-1000's longest start delay.
+    {
+        Instance i;
+        auto values = solo (0);
+        values.push_back ({ "BD Nudge", 80.0 });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (12000, { { 600, 36, 0.8 } }, l, r);
+        CHECK (onsetOf (l) == 600 + 3840);
+    }
+    // O1-O3 Tune: the 808 rim's 455 Hz network an octave down at 0 %, its 1667 Hz one an octave up at 100 %; the
+    // 909 rim's third (990 Hz) moves too.
+    {
+        const std::vector<std::pair<std::string, double>> bare = { { "RS Noise", 0.0 }, { "RS Click", 0.0 }, { "RS Decay", 0.5 } };
+        auto with = [&] (std::vector<std::pair<std::string, double>> more) { more.insert (more.begin(), bare.begin(), bare.end()); return more; };
+        const auto low = alone (1, 0, with ({ { "RS O1 Tune", 0.0 } }));
+        CHECK (partialAt (low, 0, 2400, 227.5, 48000.0) && ! partialAt (low, 0, 2400, 455.0, 48000.0));
+        const auto high = alone (1, 0, with ({ { "RS O2 Tune", 1.0 } }));
+        CHECK (partialAt (high, 0, 2400, 3334.0, 48000.0) && partialAt (high, 0, 2400, 455.0, 48000.0));
+        const auto three = alone (1, 1, with ({}));
+        const auto moved = alone (1, 1, with ({ { "RS O3 Tune", 1.0 } }));
+        CHECK (partialAt (moved, 0, 4800, 1980.0, 48000.0) && powerAt (moved, 0, 4800, 990.0, 48000.0) < 0.25 * powerAt (three, 0, 4800, 990.0, 48000.0));
+        // O1-O3 Decay: the 909 rim's rings, longer at 100 %, shorter at 0 %.
+        const auto ring = alone (1, 1, with ({ { "RS O1 Decay", 1.0 }, { "RS O2 Decay", 1.0 }, { "RS O3 Decay", 1.0 } }));
+        const auto dead = alone (1, 1, with ({ { "RS O1 Decay", 0.0 }, { "RS O2 Decay", 0.0 }, { "RS O3 Decay", 0.0 } }));
+        CHECK (energyOf (ring, 2400, 9600) > 4.0 * energyOf (three, 2400, 9600));
+        CHECK (energyOf (dead, 2400, 9600) < 0.25 * energyOf (three, 2400, 9600));
+    }
+    // Toms: Detail lifts the highs, Attack the first milliseconds; Tone below 0 darkens, above 0 thins.
+    for (int model = 0; model < 3; ++model)
+    {
+        const auto plain = alone (4, model, {});
+        const auto detail = alone (4, model, { { "LT Detail", 1.0 } });
+        const auto attack = alone (4, model, { { "LT Attack", 1.0 } });
+        const auto dark = alone (4, model, { { "LT Tone", -1.0 } }), thin = alone (4, model, { { "LT Tone", 1.0 } });
+        CHECK_MSG (split (detail, 0, 9600, 2000.0, true) > 3.0 * split (plain, 0, 9600, 2000.0, true), "model %d", model);
+        CHECK_MSG (energyOf (attack, 0, 96) > 1.5 * energyOf (plain, 0, 96), "model %d", model); // the click, then gone:
+        CHECK_MSG (std::fabs (energyOf (attack, 480, 960) / energyOf (plain, 480, 960) - 1.0) < 0.05, "model %d", model);
+        CHECK_MSG (split (dark, 0, 9600, 1000.0, true) < 0.2 * split (plain, 0, 9600, 1000.0, true), "model %d", model);
+        CHECK_MSG (split (thin, 0, 9600, 60.0, false) < 0.5 * split (plain, 0, 9600, 60.0, false), "model %d", model);
+    }
+}
+
 // Prob, Cycle, Flam, Sub-Step, Nudge, Link and Humanize.
 void testPerformance()
 {
@@ -1160,6 +1267,7 @@ int main (int argc, char** argv)
     testVelocityAccent();
     testChoke();
     testModelSwitch();
+    testGeneratorControls();
     testPerformance();
     testKeysAndMaps();
     testSideChain();

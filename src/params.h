@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.4.0"
+#define FOUNDRY_VERSION "0.5.0"
 #endif
 
 namespace foundry
@@ -35,6 +35,7 @@ enum class Unit : uint8_t
     percent, bipolar, semitones, db, pan, choice, plainInt, ratio,
     ms,        // the value is milliseconds
     msOff,     // milliseconds, 0 reads "Off"
+    muteMs,    // 0 "Kit" (the kit's Choke Time), else 1 .. 200 ms
     attackMs,  // 0..1 -> 0..100 ms (squared)
     gateMs,    // 0 Off, else 5 ms .. 2 s
     envMs,     // 5 ms .. 2 s
@@ -48,7 +49,8 @@ enum class Unit : uint8_t
 };
 
 // A voice's own controls, by type: the TR-1000 names where it has the control (its analog, 8X/9X and 606 models'),
-// new ones where it does not. Each type has 2, 5 or 8 so that every voice's block is whole rows of three.
+// new ones where it does not. Each type has 2, 5, 8 or 11 so that every voice's block is whole rows of three.
+constexpr int maxSlots = 11;
 struct SlotSpec
 {
     const char* name;
@@ -59,22 +61,25 @@ struct TypeSpec
 {
     const char* name;
     uint8_t slots;
-    SlotSpec slot[8];
+    SlotSpec slot[maxSlots];
 };
 inline constexpr TypeSpec typeSpecs[] = {
     { "Kick", 5, { { "Attack", 0, 1, Unit::percent }, { "Tone", 0, 1, Unit::percent }, { "Body Depth", 0, 1, Unit::percent },
                    { "Body Decay", 0, 1, Unit::percent }, { "Excite", 0, 1, Unit::percent } } },
-    { "Rim", 5, { { "Tone", -1, 1, Unit::bipolar }, { "Body", 0, 1, Unit::percent }, { "Noise", 0, 1, Unit::percent },
-                  { "Freq Mod", 0, 1, Unit::percent }, { "Click", 0, 1, Unit::percent } } },
+    { "Rim", 11, { { "Tone", -1, 1, Unit::bipolar }, { "Body", 0, 1, Unit::percent }, { "Noise", 0, 1, Unit::percent },
+                   { "Freq Mod", 0, 1, Unit::percent }, { "Click", 0, 1, Unit::percent }, { "O1 Tune", 0, 1, Unit::percent },
+                   { "O2 Tune", 0, 1, Unit::percent }, { "O3 Tune", 0, 1, Unit::percent }, { "O1 Decay", 0, 1, Unit::percent },
+                   { "O2 Decay", 0, 1, Unit::percent }, { "O3 Decay", 0, 1, Unit::percent } } },
     { "Snare", 8, { { "Tone", -1, 1, Unit::bipolar }, { "Snappy", 0, 1, Unit::percent }, { "Snappy Decay", 0, 1, Unit::percent },
                     { "Detune", -1, 1, Unit::bipolar }, { "Osc Mix", -1, 1, Unit::bipolar }, { "Pitch Env", 0, 1, Unit::percent },
                     { "Pitch Decay", 0, 1, Unit::percent }, { "Freq Mod", 0, 1, Unit::percent } } },
     { "Clap", 8, { { "Claps", 0, 1, Unit::percent }, { "Speed", 0, 1, Unit::percent }, { "Clap Decay", 0, 1, Unit::percent },
                    { "Mix", -1, 1, Unit::bipolar }, { "Filter", -1, 1, Unit::bipolar }, { "Nuance", 0, 1, Unit::percent },
                    { "Size", -1, 1, Unit::bipolar }, { "Tail Tone", 0, 1, Unit::percent } } },
-    { "Tom", 8, { { "Color", 0, 1, Unit::percent }, { "Color Tone", 0, 1, Unit::percent }, { "Color Decay", 0, 1, Unit::percent },
-                  { "Pitch Env", 0, 1, Unit::percent }, { "Pitch Decay", 0, 1, Unit::percent }, { "Detune", -1, 1, Unit::bipolar },
-                  { "Osc Mix", -1, 1, Unit::bipolar }, { "Shape", 0, 1, Unit::percent } } },
+    { "Tom", 11, { { "Color", 0, 1, Unit::percent }, { "Color Tone", 0, 1, Unit::percent }, { "Color Decay", 0, 1, Unit::percent },
+                   { "Pitch Env", 0, 1, Unit::percent }, { "Pitch Decay", 0, 1, Unit::percent }, { "Detune", -1, 1, Unit::bipolar },
+                   { "Osc Mix", -1, 1, Unit::bipolar }, { "Shape", 0, 1, Unit::percent }, { "Detail", 0, 1, Unit::percent },
+                   { "Attack", 0, 1, Unit::percent }, { "Tone", -1, 1, Unit::bipolar } } },
     { "Hat", 8, { { "Tone", -1, 1, Unit::bipolar }, { "Sculpt", 0, 1, Unit::percent }, { "XMod", 0, 1, Unit::percent },
                   { "Blend", 0, 1, Unit::percent }, { "Detune", 0, 1, Unit::percent }, { "Amp Mod", 0, 1, Unit::percent },
                   { "Error", 0, 1, Unit::percent }, { "Noise", 0, 1, Unit::percent } } },
@@ -99,7 +104,7 @@ struct VoiceSpec
     float hz[modelCount]; // its pitch at Tune 0 in each model (the metal's: a multiplier of its oscillators)
     float decay[modelCount][2]; // Decay 0 and 100 %: the time to fall 60 dB, seconds, per model
     float level, pan, decayKnob;
-    float slot[8]; // the slots' defaults
+    float slot[maxSlots]; // the slots' defaults
     uint8_t choke; // its choke group at first (0 none)
     int8_t gm[4];  // its General MIDI keys (Key Map: GM), -1 after the last
     float aux;     // hats: the 808 style's high pass after the VCA; cymbals: the 909 style's DAC low pass (Hz)
@@ -112,7 +117,7 @@ inline constexpr VoiceSpec voiceSpecs[voiceCount] = {
     // Pitches: the 808's and 606's measured from the machines (kick, snare, toms, congas, rim, claves, cowbell), the 909's
     // where measured (kick, snare body, rim) and estimated elsewhere; see the README.
     { "BD", "Bass Drum",   Type::kick,    m808, {   53.0f,   53.0f,   62.0f }, { { 0.10f, 5.0f }, { 0.15f, 3.0f }, { 0.08f, 1.5f } }, 0.0f,  0.0f,  0.45f, { 0.35f, 0.5f, 0.2f, 0.35f, 0.0f }, 0, { 36, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
-    { "RS", "Rim Shot",    Type::rim,     m808, {  455.0f,  220.0f, 1100.0f }, { { 0.010f, 0.20f }, { 0.012f, 0.25f }, { 0.008f, 0.15f } }, -6.0f, 0.1f, 0.35f, { 0.0f, 0.3f, 0.35f, 0.0f, 0.15f }, 0, { 37, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
+    { "RS", "Rim Shot",    Type::rim,     m808, {  455.0f,  220.0f, 1100.0f }, { { 0.010f, 0.20f }, { 0.012f, 0.25f }, { 0.008f, 0.15f } }, -6.0f, 0.1f, 0.35f, { 0.0f, 0.3f, 0.35f, 0.0f, 0.15f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f }, 0, { 37, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "SD", "Snare Drum",  Type::snare,   m909, {  175.0f,  230.0f,  205.0f }, { { 0.06f, 1.00f }, { 0.06f, 0.70f }, { 0.05f, 0.60f } }, -2.0f, 0.0f, 0.4f, { 0.0f, 0.55f, 0.4f, 0.0f, 0.0f, 0.25f, 0.3f, 0.0f }, 0, { 38, 40, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "CP", "Hand Clap",   Type::clap,    m808, { 1100.0f, 1200.0f, 1400.0f }, { { 0.08f, 1.50f }, { 0.07f, 1.20f }, { 0.05f, 0.80f } }, -3.0f, 0.0f, 0.52f, { 0.43f, 0.5f, 0.4f, 0.0f, 0.4f, 0.4f, 0.0f, 0.5f }, 0, { 39, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
     { "LT", "Low Tom",     Type::tom,     m808, {   90.0f,  100.0f,  145.0f }, { { 0.10f, 2.00f }, { 0.12f, 2.50f }, { 0.06f, 1.20f } }, -3.0f, -0.25f, 0.45f, { 0.1f, 0.4f, 0.4f, 0.2f, 0.4f, 0.0f, -1.0f, 0.0f }, 0, { 41, 43, -1 }, 0.0f, { 0.0f, 0.0f, 0.0f } },
@@ -154,16 +159,21 @@ enum : uint32_t
     level = 0, pan, model, tune, decay, slot0,
     bendType = slot0 + 8, bend, drive, filter, cutoff, reso, fltEnv, fltDecay, attack, gate, velSens, accent, choke,
     reverb, delay, duck, prob, flam, subStep, cycle, nudge, link, lfoTarget, lfoWave, lfoRate, lfoDepth,
-    count
+    phase, bendMix, muteDecay, // 0.5.0: the TR-1000's PHASE, its reformer's amount, the 808 open hat's MUTE DCY
+    slot8,                     // slots 8-10 (the 11-slot types')
+    count = slot8 + 3
 };
 }
 static_assert (M::count <= 64 && V::count <= 64, "ids fit their ranges");
 constexpr uint32_t voiceIdBase = 64, voiceIdStride = 64, idLimit = voiceIdBase + voiceIdStride * voiceCount;
 constexpr uint32_t voiceId (int voice, uint32_t offset) { return voiceIdBase + (uint32_t) voice * voiceIdStride + offset; }
+// A type's slot k: the first eight follow the voice's first controls, the rest came later and sit after the others.
+constexpr uint32_t slotId (int k) { return k < 8 ? V::slot0 + (uint32_t) k : V::slot8 + (uint32_t) (k - 8); }
 
 // --- Choices -----------------------------------------------------------------------------------------------------
 
 inline const char* const modelChoices[] = { "808", "909", "606" };
+inline const char* const phaseChoices[] = { "Normal", "Inverse" };
 inline const char* const filterChoices[] = { "Off", "Low Pass", "High Pass", "Band Pass" };
 inline const char* const chokeChoices[] = { "Off", "1", "2", "3", "4" };
 inline const char* const subStepChoices[] = { "1", "2", "3", "4", "6", "8" };
@@ -228,8 +238,8 @@ struct Param
     const char* const* choices; // Kind::choice: max - min + 1 names
 };
 
-// How many rows: the kit's and each voice's (31 shared controls and its type's slots).
-constexpr uint32_t sharedVoiceControls = 31;
+// How many rows: the kit's and each voice's (34 shared controls and its type's slots).
+constexpr uint32_t sharedVoiceControls = 34;
 constexpr uint32_t countRows()
 {
     uint32_t n = M::count;
@@ -296,11 +306,13 @@ inline ParamTable buildTable()
         t.cont (id (V::tune), pre, "Tune", mod, -24.0f, 24.0f, 0.0f, Unit::semitones);
         t.cont (id (V::decay), pre, "Decay", mod, 0.0f, 1.0f, s.decayKnob, Unit::percent);
         for (int k = 0; k < ts.slots; ++k)
-            t.cont (id (V::slot0 + (uint32_t) k), pre, ts.slot[k].name, mod, ts.slot[k].min, ts.slot[k].max, s.slot[k], ts.slot[k].unit);
+            t.cont (id (slotId (k)), pre, ts.slot[k].name, mod, ts.slot[k].min, ts.slot[k].max, s.slot[k], ts.slot[k].unit);
         FOUNDRY_CHOICE (t, id (V::model), pre, "Model", mod, modelChoices, (float) s.model);
         t.cont (id (V::pan), pre, "Pan", mod, -1.0f, 1.0f, s.pan, Unit::pan);
+        FOUNDRY_CHOICE (t, id (V::phase), pre, "Phase", mod, phaseChoices, 0.0f);
         t.cont (id (V::bendType), pre, "Bend Type", mod, 0.0f, 1.0f, 0.0f, Unit::percent);
         t.cont (id (V::bend), pre, "Bend", mod, 0.0f, 1.0f, 0.0f, Unit::percent);
+        t.cont (id (V::bendMix), pre, "Bend Mix", mod, 0.0f, 1.0f, 1.0f, Unit::percent);
         t.cont (id (V::drive), pre, "Drive", mod, 0.0f, 1.0f, 0.0f, Unit::percent);
         FOUNDRY_CHOICE (t, id (V::filter), pre, "Flt Type", mod, filterChoices, 0.0f);
         t.cont (id (V::cutoff), pre, "Cutoff", mod, 0.0f, 1.0f, 0.75f, Unit::cutoffHz);
@@ -315,8 +327,9 @@ inline ParamTable buildTable()
         t.cont (id (V::delay), pre, "Delay", mod, 0.0f, 1.0f, 0.0f, Unit::percent);
         t.cont (id (V::duck), pre, "Duck", mod, 0.0f, 1.0f, 0.0f, Unit::percent);
         FOUNDRY_CHOICE (t, id (V::choke), pre, "Choke", mod, chokeChoices, (float) s.choke);
+        t.cont (id (V::muteDecay), pre, "Mute Decay", mod, 0.0f, 1.0f, 0.0f, Unit::muteMs);
         FOUNDRY_CHOICE (t, id (V::link), pre, "Link", mod, voiceChoices, 0.0f);
-        t.cont (id (V::nudge), pre, "Nudge", mod, 0.0f, 50.0f, 0.0f, Unit::ms);
+        t.cont (id (V::nudge), pre, "Nudge", mod, 0.0f, 80.0f, 0.0f, Unit::ms);
         t.cont (id (V::prob), pre, "Prob", mod, 0.0f, 1.0f, 1.0f, Unit::percent);
         t.cont (id (V::flam), pre, "Flam", mod, 0.0f, 60.0f, 0.0f, Unit::msOff);
         FOUNDRY_CHOICE (t, id (V::subStep), pre, "Sub-Step", mod, subStepChoices, 0.0f);
@@ -415,6 +428,10 @@ inline void formatParam (const Param& p, float v, char* text, uint32_t size)
             break;
         case Unit::envMs: time (envMs (v)); break;
         case Unit::chokeMs: time (chokeMs (v)); break;
+        case Unit::muteMs:
+            if (v <= 0.0f) std::snprintf (text, size, "Kit");
+            else time (chokeMs (v));
+            break;
         case Unit::releaseMs: time (releaseMs (v)); break;
         case Unit::revTime: time (revSeconds (v) * 1000.0f); break;
         case Unit::compAtkMs: time (compAttackMs (v)); break;
@@ -445,6 +462,8 @@ inline bool parseParam (const Param& p, const char* text, float& v)
                 return v = (float) i, true;
     }
     if (strcasecmp (text, "Off") == 0 && (p.unit == Unit::msOff || p.unit == Unit::gateMs || p.unit == Unit::afxFilter))
+        return v = 0.0f, true;
+    if (p.unit == Unit::muteMs && strcasecmp (text, "Kit") == 0)
         return v = 0.0f, true;
     if (p.unit == Unit::db && strncasecmp (text, "-inf", 4) == 0)
         return v = p.min, true;
@@ -478,6 +497,7 @@ inline bool parseParam (const Param& p, const char* text, float& v)
         case Unit::gateMs: v = ms <= 0.0 ? 0.0f : std::fmax (inv (ms, 5.0, 400.0), 0.001f); break;
         case Unit::envMs: v = inv (ms, 5.0, 400.0); break;
         case Unit::chokeMs: v = inv (ms, 1.0, 200.0); break;
+        case Unit::muteMs: v = std::fmax (inv (ms, 1.0, 200.0), 0.001f); break;
         case Unit::releaseMs: v = inv (ms, 20.0, 50.0); break;
         case Unit::revTime: v = inv (ms / 1000.0, 0.3, 40.0); break;
         case Unit::compAtkMs: v = inv (ms, 0.1, 300.0); break;

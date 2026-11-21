@@ -58,7 +58,9 @@ struct Engine
     int clip = 1;
     int8_t gmVoice[128];
 
-    float buf[tick] {}, mixL[tick] {}, mixR[tick] {}, revIn[tick] {}, dlyIn[tick] {}, key[tick] {};
+    // Aligned for the vector unit: the mixing loops then need no lead-in, whatever the voices' size.
+    alignas (16) float buf[tick] {};
+    alignas (16) float mixL[tick] {}, mixR[tick] {}, revIn[tick] {}, dlyIn[tick] {}, key[tick] {};
 
     Engine()
     {

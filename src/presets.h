@@ -15,7 +15,7 @@ inline void setValue (float* values, uint32_t id, float v)
         values[i] = clampParam (table().rows[i], v);
 }
 inline void vset (float* values, int voice, uint32_t offset, float v) { setValue (values, voiceId (voice, offset), v); }
-inline void slotSet (float* values, int voice, int slot, float v) { vset (values, voice, V::slot0 + (uint32_t) slot, v); }
+inline void slotSet (float* values, int voice, int slot, float v) { vset (values, voice, slotId (slot), v); }
 inline void allModels (float* values, int model)
 {
     for (int v = 0; v < voiceCount; ++v)

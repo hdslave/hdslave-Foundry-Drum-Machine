@@ -95,7 +95,7 @@ struct Voice
     float x[16] {}; // the type's constants for the hit
     Svf f[6];
     float lp[2] {}, lpa[2] {};
-    Noise noise;
+    Noise noise, clickNoise; // clickNoise: the toms' Attack, apart so the rest's noise is the same without it
     float prevOsc = 0.0f;
     int32_t count = 0, countNext = 0, burstsLeft = 0, burstGap = 1, rampLen = 1;
     float holdValue = 0.0f, quant = 1.0f;
@@ -121,8 +121,11 @@ struct Voice
     float g0[5] {}, g1[5] {};
     float levelDb = 1e9f, levelGain = 0.0f;      // the Level the gain was last worked out for
     float cutoffKnob = -1.0f, cutoffBase = 0.0f; // the Cutoff the filter's base was last worked out for
+    float muteKnob = 0.0f, muteRate = 0.0f, muteCoef = 1.0f; // the Mute Decay its fade was last worked out for
+    float bendMix = 1.0f;
+    bool inverse = false, ownMute = false;
 
-    float slot (int k) const { return p[V::slot0 + (uint32_t) k]; }
+    float slot (int k) const { return p[slotId (k)]; }
 
     void init (int i)
     {
@@ -130,6 +133,7 @@ struct Voice
         spec = &voiceSpecs[i];
         type = spec->type;
         noise.s = 0x9e3779b9u + 0x85ebca6bu * (uint32_t) (i + 1);
+        clickNoise.s = 0x2545f491u + 0x9e3779b9u * (uint32_t) (i + 1);
         for (int k = 0; k < 6; ++k) // the oscillators run free: they never start together
             ph[k] = hash01 ((uint64_t) (i * 8 + k) + 77u);
     }
@@ -205,6 +209,11 @@ struct Voice
         driveGain = 1.0f + 7.0f * drive;
         driveNorm = drive > 0.0f ? 1.0f / tanhFast (driveGain) : 1.0f;
         filterMode = (uint8_t) p[V::filter];
+        bendMix = p[V::bendMix];
+        inverse = p[V::phase] > 0.5f;
+        ownMute = p[V::muteDecay] > 0.0f;
+        if (ownMute && (p[V::muteDecay] != muteKnob || sh.rate != muteRate))
+            muteKnob = p[V::muteDecay], muteRate = sh.rate, muteCoef = decayCoef (chokeMs (muteKnob) * 0.001f, sh.rate);
         if (filterMode != 0)
         {
             const float octaves = 6.0f * p[V::fltEnv] * fenv + (target == lfoCutoff ? 3.0f * lfo : 0.0f);
@@ -325,9 +334,9 @@ struct Voice
                 }
                 break;
             case Type::rim:
-                res[0].tune (c);
+                res[0].tune (c * x[3]);
                 res[1].tune (c * ratio);
-                res[2].tune (c * 4.5f);
+                res[2].tune (c * 4.5f * x[4]);
                 break;
             case Type::clap:
                 f[0].setHz (hz * lfoPitch * clapShift, f[0].k, rate);
@@ -469,17 +478,22 @@ struct Voice
     {
         const float tone = slot (0), body = slot (1);
         static constexpr float ratios[] = { 3.664f, 2.27f, 2.0f };
-        ratio = ratios[model];
+        // O1-O3 Tune, Decay: each network's (oscillator's) pitch, an octave either way, and its ring, a quarter to
+        // four times; at 50 % as they are. The third is the 909 style's.
+        auto tuneOf = [this] (int k) { return exp2Fast (2.0f * (slot (5 + k) - 0.5f)); };
+        auto ringOf = [this] (int k) { return exp2Fast (4.0f * (slot (8 + k) - 0.5f)); };
+        x[3] = tuneOf (0), x[4] = tuneOf (2);
+        ratio = ratios[model] * tuneOf (1);
         const float c = hz * lfoPitch * invRate;
         const bool vca = model == m808;
         const float ring = vca ? 0.15f : decay;
-        res[0].tune (c, decayCoef (ring * (1.0f + 1.5f * body), sh.rate));
-        res[1].tune (c * ratio, decayCoef (ring * (vca ? 0.35f : 1.0f), sh.rate));
+        res[0].tune (c * x[3], decayCoef (ring * (1.0f + 1.5f * body) * ringOf (0), sh.rate));
+        res[1].tune (c * ratio, decayCoef (ring * (vca ? 0.35f : 1.0f) * ringOf (1), sh.rate));
         res[0].strike (amp * (0.4f + body));
         res[1].strike (amp);
         if (model == m909)
         {
-            res[2].tune (c * 4.5f, decayCoef (decay * 0.6f, sh.rate));
+            res[2].tune (c * 4.5f * x[4], decayCoef (decay * 0.6f * ringOf (2), sh.rate));
             res[2].strike (amp * 0.6f);
         }
         x[0] = 0.6f + 0.6f * body;
@@ -500,7 +514,7 @@ struct Voice
         {
             const float y0 = res[0].ring();
             if (x[2] > 0.0f)
-                res[1].tune (base2 * (1.0f + x[2] * y0));
+                res[1].tune (base2 * (1.0f + x[2] * y0)); // O1 swings O2
             float y = x[0] * y0 + x[1] * res[1].ring();
             if (three)
                 y += 0.5f * res[2].ring();
@@ -735,6 +749,18 @@ struct Voice
         }
         e[1] = amp * slot (0) * 0.5f, ec[1] = decayCoef (0.02f * std::pow (40.0f, slot (2)), sh.rate);
         lpa[0] = onePoleCoef (200.0f * std::pow (32.0f, slot (1)), sh.rate);
+        // Detail (the TR-1000's, on its 909 toms): the highs brought out, the edges of the tom squared off and kept
+        // above 1.5 kHz. Attack (new): the stick's click, a pulse with some noise, gone in about 5 ms. Tone (new): a
+        // low pass down from open (to 400 Hz), or a high pass up (to 800 Hz).
+        x[7] = slot (8);
+        f[2].setHz (1500.0f, 1.0f, sh.rate);
+        e[2] = 1.2f * amp * slot (9), ec[2] = decayCoef (0.005f, sh.rate);
+        const float tone = slot (10);
+        x[8] = tone < 0.0f ? 1.0f : tone > 0.0f ? 2.0f : 0.0f;
+        if (tone < 0.0f)
+            f[3].setHz (20000.0f * exp2Fast (5.64f * tone), 0.9f, sh.rate);
+        else if (tone > 0.0f)
+            f[3].setHz (20.0f * exp2Fast (5.32f * tone), 0.9f, sh.rate);
     }
     [[gnu::always_inline]] bool renderTom (float* out, int n)
     {
@@ -786,8 +812,28 @@ struct Voice
             lp[1] += (lp[0] - lp[1]) * lpa[0];
             out[i] = y + 2.0f * lp[1];
         }
+        // Attack, Detail and Tone, over the tom (a pass of their own, only when one is on).
+        const bool click = e[2] > 0.0f, detail = x[7] > 0.0f;
+        const int tone = (int) x[8];
+        if (click || detail || tone != 0)
+            for (int i = 0; i < n; ++i)
+            {
+                float o = out[i];
+                if (click)
+                {
+                    o += e[2] * (0.6f + 0.5f * clickNoise.next());
+                    e[2] *= ec[2];
+                }
+                if (detail)
+                    o += x[7] * f[2].hp (tanhFast (8.0f * o));
+                if (tone == 1)
+                    o = f[3].lp (o);
+                else if (tone == 2)
+                    o = f[3].hp (o);
+                out[i] = o;
+            }
         const float body = vco ? e[0] : res[0].size() + res[1].size();
-        return body > silent || e[1] > silent || std::fabs (lp[1]) > silent;
+        return body > silent || e[1] > silent || std::fabs (lp[1]) > silent || e[2] > silent;
     }
 
     // --- Hats and cymbals -------------------------------------------------------------------------------------------
@@ -1134,8 +1180,19 @@ struct Voice
     }
     void chain (float* out, int n, const Shared& sh)
     {
-        if (! bendOn && driveGain <= 1.0f && filterMode == 0 && attackInc <= 0.0f && gateLeft < 0 && ! fading)
-            return; // nothing in it: the voice as it is
+        if (bendOn && bendMix < 1.0f)
+            shape<true> (out, n, sh);
+        else if (bendOn || driveGain > 1.0f || filterMode != 0 || attackInc > 0.0f || gateLeft >= 0 || fading)
+            shape<false> (out, n, sh); // otherwise nothing in it: the voice as it is
+        if (inverse) // Phase: Inverse
+            for (int i = 0; i < n; ++i)
+                out[i] = -out[i];
+    }
+    // `mixing`: Bend Mix under 100 % (its own copy of the loop, so the usual one stays as lean as it was).
+    template <bool mixing> void shape (float* out, int n, const Shared& sh)
+    {
+        // A choke's or the gate's fade: the voice's own Mute Decay (the TR-1000's MUTE DCY), or the kit's Choke Time.
+        const float fadeCoef = ownMute ? muteCoef : sh.chokeCoef;
         const int seg = std::min (2, (int) bendPos);
         const float frac = bendPos - (float) seg;
         const bool decimating = bendOn && seg + 1 >= 3;
@@ -1152,7 +1209,10 @@ struct Voice
                 }
                 const float a = bendChar (seg, v);
                 const float b = frac > 0.0f ? bendChar (seg + 1, v) : a;
-                v = dc.run (a + (b - a) * frac);
+                if (mixing)
+                    v += bendMix * (dc.run (a + (b - a) * frac) - v); // Bend Mix: the reformer's amount
+                else
+                    v = dc.run (a + (b - a) * frac);
             }
             if (driveGain > 1.0f)
                 v = tanhFast (v * driveGain) * driveNorm;
@@ -1178,7 +1238,7 @@ struct Voice
             }
             if (fading)
             {
-                fade *= sh.chokeCoef;
+                fade *= fadeCoef;
                 g *= fade;
             }
             out[i] = v * g;
