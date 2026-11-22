@@ -1,17 +1,14 @@
-# Foundry
+# hdslave Foundry
 
-A sixteen-voice drum machine in the style of the 808, 909 and 606, as a CLAP plug-in, built for the Akai MPC Sample
-running Melodee (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Foundry** (id `com.hdslave.foundry`).
+**A 16-voice 808 / 909 / 606 drum machine with TR-1000-style per-voice shaping as a CLAP plug-in for the Akai MPC Sample.**
 
-Every voice is a circuit type (kick, snare, tom, rim, clap, hat, cymbal, cowbell, claves, maracas) with three models
-(808, 909 and 606 style) and the controls the TR-1000 gives that instrument across its analog, circuit-bent (8X/9X)
-and 606 models, plus a shared chain the TR-1000 has per instrument (bend, drive, filter with its envelope, amp
-attack and gate, sends), plus its step features (probability, cycles, flam, sub-steps, nudge) applied to the notes
-the host plays. The 606 kit gets the controls its classic hardware mods add (see [The 606 and its mods](#the-606-and-its-mods)).
+![Foundry X0X Drum Works screen running in hdslaveOS](docs/foundry-screen.gif)
 
-It has no sequencer of its own: the host plays it. In Melodee, a plug-in track on Foundry plays it from its pads as a
-kit (Foundry carries the pad map Melodee looks for), and Melodee's step sequencer, swing, note repeat and MOTION do
-what the TR's own would.
+Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melodee-sample) / [hdslaveOS](https://github.com/hdslave/hdslaveOS) (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Foundry** (id `com.hdslave.foundry`).
+
+Every pad is a dedicated circuit-modelled drum voice (kick, snare, tom, rim, clap, hat, cymbal, cowbell, claves, maracas) switchable between **808**, **909**, and **606** models — with TR-1000-style analog and circuit-bent (8X/9X) controls, classic hardware-mod controls on the 606 kit (see [The 606 and its mods](#the-606-and-its-mods)), a shared per-voice chain (bend, drive, filter + envelope, amp attack/gate, sends), and per-note performance tools (probability, cycles, flam, sub-steps, nudge), plus reverb, delay, bus compression, and a dedicated kick-only **SC Key** sidechain output for hdslaveOS's master compressor.
+
+Foundry has no internal sequencer — the host plays it directly from the MPC's pads as a kit (carrying the pad map Melodee expects), so Melodee's step sequencer, swing, note repeat, and MOTION drive every voice. Under **hdslaveOS**, it draws the animated **X0X Drum Works** screen with live pad feedback and a 2-second hit timeline.
 
 ## The kit
 
