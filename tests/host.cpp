@@ -499,6 +499,14 @@ void testScreen()
     std::this_thread::sleep_for (std::chrono::milliseconds (520));
     quiet.play (256, {}, l, r);
     CHECK (peakOf (l) == 0);
+
+    // An audition plays the voice whatever its Prob or Cycle: a bass drum at Prob 0 still sounds on the page's Push.
+    Instance never;
+    never.setup ({ { "BD Prob", 0 } });
+    melodee_screen_input push { MELODEE_SCREEN_PUSH, 0, false };
+    CHECK (ui->input (never.plugin, &push));
+    never.play (1024, {}, l, r);
+    CHECK (peakOf (l) > 0.01);
 }
 
 void testParameters()

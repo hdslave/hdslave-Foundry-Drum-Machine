@@ -460,7 +460,7 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     else
         p.engine.transport (false, __builtin_nan (""), 0.0, 4.0);
 
-    p.auditions.take ([&] (int v) { p.engine.playVoice (v, 104.0f / 127.0f, 0.0f); });
+    p.auditions.take ([&] (int v) { p.engine.playVoice (v, 104.0f / 127.0f, 0.0f, true); });
 
     const auto* in = process->in_events;
     const uint32_t count = in != nullptr ? in->size (in) : 0;

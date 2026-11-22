@@ -216,15 +216,16 @@ struct Engine
 
     // The note's voice and the voices linked to it. Humanize's numbers (how late, how much softer) are the note's,
     // drawn as its voice's, so its layers land together; each layer keeps its own Prob and Cycle.
-    void playVoice (int v, float velocity, float transpose)
+    // audition: the page's Push, which plays the voice and its linked layers whatever their Prob and Cycle.
+    void playVoice (int v, float velocity, float transpose, bool audition = false)
     {
         const uint32_t note = ++notes;
         const double beats = beatsAt (now);
         const float late = chance (v, beats, 1), softer = chance (v, beats, 2);
-        hitVoice (v, velocity, transpose, note, late, softer);
+        hitVoice (v, velocity, transpose, note, late, softer, audition);
         for (int u = 0; u < voiceCount; ++u)
             if (u != v && (int) voices[u].p[V::link] == v + 1)
-                hitVoice (u, velocity, transpose, note, late, softer);
+                hitVoice (u, velocity, transpose, note, late, softer, audition);
     }
 
     // A choke from the host (a pad cut): the voice and the voices linked to it fade, and their waiting hits go.
@@ -257,17 +258,17 @@ struct Engine
         return hash01 ((uint64_t) stoppedHits[v] * 64u + (uint64_t) v * 4u + (uint64_t) k + 0xc0ffeeull);
     }
 
-    void hitVoice (int v, float velocity, float transpose, uint32_t note, float late, float softer)
+    void hitVoice (int v, float velocity, float transpose, uint32_t note, float late, float softer, bool audition = false)
     {
         const Voice& voice = voices[v];
         const double beats = beatsAt (now);
         const float r = chance (v, beats, 0);
         if (! playing)
             ++stoppedHits[v];
-        if (voice.p[V::prob] < 1.0f && r >= voice.p[V::prob])
+        if (! audition && voice.p[V::prob] < 1.0f && r >= voice.p[V::prob])
             return;
         const int cycle = (int) voice.p[V::cycle];
-        if (playing && cycle != 0)
+        if (! audition && playing && cycle != 0)
         {
             const double bar = barOf (beats);
             const int nth = cycleOf[cycle][0], every = cycleOf[cycle][1];
