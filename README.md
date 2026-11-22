@@ -406,6 +406,6 @@ these compiler flags.
 
 ## Install
 
-Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave Foundry/hdslave Foundry.clap` on the card, then pick it on an
-empty track: Stage, Plugin, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
+Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on the card, then pick it on an
+empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
