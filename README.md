@@ -347,9 +347,9 @@ Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
-| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 589,000 | 12.3 % |
-| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 135,000 | 2.8 % |
-| Stopped | about 3,800 | 0.08 % |
+| All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 583,000 | 12.1 % |
+| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 121,000 | 2.5 % |
+| Stopped | about 3,700 | 0.08 % |
 
 A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. The
 hats' six oscillators are worked out four at a time on the NEON unit while XMod is at 0 (their default). A
@@ -408,3 +408,6 @@ these compiler flags.
 Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on the card, then pick it on an
 empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
+
+This is version 0.6.4. It has not yet been run on the MPC: every check above ran in the build container and in
+hdslaveOS's host tools, not on the device.
