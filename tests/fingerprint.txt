@@ -62,9 +62,9 @@ chain-3 77442d289d3c61e2
 performance cca44f2321a26c3d
 gm-map 5b0b520c56dac91b
 lfos 56107d4652769398
-effects-0 ea8818e640f29bec
-effects-1 e497341705e35fc7
-effects-2 7599543f1da23b5c
+effects-0 d75a8a892ef85113
+effects-1 d46e88ebafae96f5
+effects-2 3edcdc020b070eb6
 effects-3 2b44eba9bcc9b3c7
 effects-4 06e3cb9dee98d9ff
 effects-5 7452cceb02e7402c

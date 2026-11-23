@@ -153,13 +153,10 @@ struct Reverb
             if (x == 0.0f && std::fabs (l) + std::fabs (rr) < 1e-7f)
             {
                 if (++quiet > sleepAfter)
-                {
-                    asleep = true;
-                    return;
-                }
+                    asleep = true; // from the next call; this call's remaining samples are still taken
             }
             else
-                quiet = 0;
+                quiet = 0, asleep = false;
         }
     }
 };
@@ -269,14 +266,10 @@ struct Delay
             if (x == 0.0f && std::fabs (yl) + std::fabs (yr) < 1e-7f)
             {
                 if (++quiet > sleepAfter)
-                {
-                    asleep = true;
-                    real = std::min (quiet, size);
-                    return;
-                }
+                    asleep = true; // from the next call; this call's remaining samples are still taken
             }
             else
-                quiet = 0;
+                quiet = 0, asleep = false;
         }
         if (asleep)
             real = std::min (quiet, size); // the silence it wrote; before that, what it played before going quiet

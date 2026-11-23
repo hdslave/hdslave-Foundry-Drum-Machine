@@ -1731,7 +1731,6 @@ void testRetriggerFromFade()
 // The send effects fall asleep on a sample inside a tick; a send later in that same tick must still be taken
 // (engine-level: the exact boundary sample cannot be placed from outside). An impulse is put a few quiet samples
 // past where each effect gives up, inside one 16-sample call, and its echo/tail must appear.
-#if 0 // phase-A only: enabled with the fix it tests
 void testFxSleepBoundary()
 {
     float in[16] {}, left[16] {}, right[16] {}, rev[16] {};
@@ -1787,7 +1786,6 @@ void testFxSleepBoundary()
         CHECK_MSG (peak > 1e-4, "reverb tail of the boundary impulse peaks %g", peak);
     }
 }
-#endif
 
 // Raw MIDI panic (a host that sends MIDI, not CLAP notes): CC 120 and CC 123 silence the kit. Non-finite and
 // extreme tempos from the transport must neither hang nor make unbounded output.
@@ -1908,6 +1906,7 @@ int main (int argc, char** argv)
     testBlockSizes();
     testModelRoundTrip();
     testRetriggerFromFade();
+    testFxSleepBoundary();
     testRawMidiPanicAndTempo();
     testExtremes();
     testSilence();
