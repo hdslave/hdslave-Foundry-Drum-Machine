@@ -121,6 +121,7 @@ struct Voice
     float g0[5] {}, g1[5] {};
     float levelDb = 1e9f, levelGain = 0.0f;      // the Level the gain was last worked out for
     float cutoffKnob = -1.0f, cutoffBase = 0.0f; // the Cutoff the filter's base was last worked out for
+    float fltHz = -1.0f, fltK = -1.0f, fltRate = -1.0f; // the corner the shared filter was last set for (exact)
     float muteKnob = 0.0f, muteRate = 0.0f, muteCoef = 1.0f; // the Mute Decay its fade was last worked out for
     float bendMix = 1.0f;
     bool inverse = false, ownMute = false;
@@ -222,7 +223,9 @@ struct Voice
             const float k = 2.0f - 1.95f * p[V::reso];
             if (p[V::cutoff] != cutoffKnob)
                 cutoffKnob = p[V::cutoff], cutoffBase = cutoffHz (cutoffKnob);
-            flt.setHz (cutoffBase * exp2Fast (clampf (octaves, -12.0f, 12.0f)), k, sh.rate);
+            const float hz = cutoffBase * exp2Fast (clampf (octaves, -12.0f, 12.0f));
+            if (hz != fltHz || k != fltK || sh.rate != fltRate) // the same corner again needs no new coefficients
+                fltHz = hz, fltK = k, fltRate = sh.rate, flt.setHz (hz, k, sh.rate);
             fenv *= fenvTick;
         }
         // The mix.
@@ -246,7 +249,7 @@ struct Voice
     // `velocity` 0..1 after the curve; `accent` how far the accent lifts it (0 none); `transpose` semitones.
     void trigger (float velocity, float accent, float transpose, const Shared& sh)
     {
-        const bool wasActive = active;
+        const bool wasActive = active && ! fading; // a fading voice is cleared below: its hit starts from silence
         if (fading)
             clearState(); // a choked voice's tail is gone, not back at full
         fading = false;
@@ -392,6 +395,7 @@ struct Voice
         lp[1] = 0.0f;
         if (model == m909)
         {
+            res[0].clear(), res[1].clear(); // the struck networks are not run here: nothing of theirs may wait frozen
             ph[0] = 0.0f;
             const float tau = decay / 9.23f; // the held envelope (1 + t/tau) e^(-t/tau) falls 60 dB at 9.23 tau
             e[0] = amp, e[3] = 0.0f, ec[0] = std::exp (-sh.invRate / tau), x[5] = sh.invRate / tau;
@@ -408,6 +412,7 @@ struct Voice
         penv = 1.0f, pcoef = std::exp (-sh.invRate / (0.001f + 0.0086f * time));
         if (model == m808)
         {
+            res[1].clear(); // the 606 style's click network: not run here, not left frozen for a later hit
             bendMul = 7.14f * attack;
             x[3] = 1.5f * depth;
             e[3] = 1.43f * attack, ec[3] = std::exp (-sh.invRate / 0.003f);
@@ -564,6 +569,7 @@ struct Voice
         x[2] = slot (7);
         if (model == m909)
         {
+            res[0].clear(), res[1].clear(); // as the kick's: the networks rest here, so they start empty back there
             ph[0] = ph[1] = 0.0f;
             e[0] = amp, ec[0] = decayCoef (decay, sh.rate);
             e[3] = amp, ec[3] = decayCoef (decay * 0.6f, sh.rate);
@@ -738,6 +744,7 @@ struct Voice
         x[4] = 1.0f / tanhFast (x[3]);
         if (model == m909)
         {
+            res[0].clear(), res[1].clear(); // as the kick's: the networks rest here, so they start empty back there
             bendMul = exp2Fast (1.4f * pe) - 1.0f;
             pcoef = decayCoef (0.02f * std::pow (30.0f, pd), sh.rate);
             penv = 1.0f;

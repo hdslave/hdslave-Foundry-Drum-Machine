@@ -21,17 +21,20 @@ inline uint64_t clockMs()
 
 // One writer on the audio thread. Each slot is a complete observation, even if a reader
 // falls more than a ring behind. The sound never waits for a paint, including while hidden.
+// Stamps are the engine's sample count turned to milliseconds by the caller: no clock is read here.
 struct HitMeter
 {
     static constexpr unsigned capacity = 512;
     std::atomic<uint64_t> hits[capacity] {};
     std::atomic<unsigned> end { 0 };
+    std::atomic<uint64_t> latestMs { 0 }; // the newest hit's stamp, for the page's clock meeting
     static_assert (std::atomic<uint64_t>::is_always_lock_free);
-    void strike (int voice, float vel)
+    void strike (int voice, float vel, uint64_t ms)
     {
         const unsigned n = end.load (std::memory_order_relaxed);
         const unsigned level = (unsigned) std::clamp (std::lround (vel * 127), 0l, 127l);
-        hits[n % capacity].store ((clockMs() << 12) | (level << 4) | (unsigned) voice, std::memory_order_relaxed);
+        hits[n % capacity].store ((ms << 12) | (level << 4) | (unsigned) voice, std::memory_order_relaxed);
+        latestMs.store (ms, std::memory_order_relaxed);
         end.store (n + 1, std::memory_order_release);
     }
 };
@@ -114,6 +117,7 @@ struct Screen
     bool dirty = true, moving = false, shifted = false;
     int previousPot[3] { -2, -2, -2 };
     uint64_t lastPaint = 0, canvasOrigin = 0, meterOrigin = 0;
+    unsigned hitsSeen = 0;
     bool clockSet = false;
     int voice() const { return padVoice[pad]; }
     int voiceRows() const { return sharedVoiceControls + typeSpec (voiceSpecs[voice()].type).slots; }
@@ -276,14 +280,21 @@ struct Screen
         shifted = c.shift;
         if (!c.whole && !dirty && (!moving || c.now_ms-lastPaint < 40)) return false;
         History history;
-        // The canvas clock and the audio meter clock are both monotonic but have different origins.
-        if (!clockSet || c.now_ms < lastPaint)
+        // The hits are stamped in rendered samples; the canvas clock runs on while the host sleeps the plug-in.
+        // The two meet at an origin pair, met again whenever they have plainly parted (a sleep between paints).
+        const uint64_t latest = meter.latestMs.load (std::memory_order_relaxed);
+        const unsigned end = meter.end.load (std::memory_order_acquire);
+        uint64_t meterNow = meterOrigin + (c.now_ms - canvasOrigin);
+        if (! clockSet || c.now_ms < lastPaint || latest > meterNow
+            || (end != hitsSeen && meterNow > latest + span))
         {
             clockSet = true;
             canvasOrigin = c.now_ms;
-            meterOrigin = clockMs();
+            meterOrigin = latest;
+            meterNow = latest;
         }
-        readHits (history, meter, meterOrigin + (c.now_ms - canvasOrigin));
+        hitsSeen = end;
+        readHits (history, meter, meterNow);
         moving = history.count > 0;
         Paper g { c.pixels, c.stride };
         g.print (0, 0, 320, 218, 0, 0);

@@ -30,9 +30,14 @@ struct Engine
     static constexpr int queueSize = 64;
 
     void* meterContext = nullptr;
-    void (*meterStrike) (void*, int, float) = nullptr;
+    void (*meterStrike) (void*, int, float, uint64_t) = nullptr; // voice, strength, the hit's time in samples
     Voice voices[voiceCount];
     float m[M::count] {};
+    // The kit values (and rate/tempo) the master coefficients were last worked out for, exactly: a kit write that
+    // changes nothing for a subgroup leaves its coefficients as they are.
+    float appliedM[M::count] {};
+    double appliedRate = 0.0, appliedBpm = 0.0;
+    bool masterValid = false;
     Shared sh;
     double rate = 48000.0;
     int64_t now = 0;
@@ -86,6 +91,7 @@ struct Engine
         sh.invRate = (float) (1.0 / rate);
         reverb.prepare ((float) rate);
         delay.prepare ((float) rate);
+        masterValid = false; // the rate and the lines' lengths are new: every coefficient is worked out again
         applyMaster();
         reset();
     }
@@ -119,44 +125,70 @@ struct Engine
             voices[v].p[off] = value;
     }
 
-    // The kit's controls into the effects and what the voices share.
+    // The kit's controls into the effects and what the voices share. Each subgroup is worked out only when one of
+    // its own inputs (or the rate) actually changed, to the float: the coefficients are pure functions of them.
     void applyMaster()
     {
         const float r = (float) rate;
-        sh.kitTune = m[M::kitTune];
-        sh.kitDecay = std::exp2 (1.5f * m[M::kitDecay]);
-        sh.chokeCoef = decayCoef (chokeMs (m[M::chokeTime]) * 0.001f, r);
-        duckTick = std::exp (-(float) tick / (releaseMs (m[M::scRelease]) * 0.001f * r)); // back to 1/e of the dip in Release
-        reverb.set (revSeconds (m[M::revTime]), m[M::revTone], m[M::revPreDelay], lowCutHz (m[M::revLowCut]), m[M::revMod], m[M::revLevel]);
-        setDelay();
-        const float amount = m[M::comp];
-        compOn = amount > 0.0f;
-        compThr = -30.0f * amount;
-        const float ratio = 1.0f + 7.0f * amount;
-        compSlope = 1.0f - 1.0f / ratio;
-        scVoice = (int) m[M::scSource] - 1;
-        compKeyed = m[M::compKey] >= 0.5f && scVoice >= 0;
-        compMakeup = compKeyed ? 0.0f : -compThr * compSlope * 0.6f; // keyed, it only ducks
-        compAtk = 1.0f - std::exp (-1.0f / (compAttackMs (m[M::compAttack]) * 0.001f * r));
-        compRel = 1.0f - std::exp (-1.0f / (releaseMs (m[M::compRelease]) * 0.001f * r));
-        compMix = m[M::compMix];
-        const float f = m[M::afxFilter];
-        afxMode = std::fabs (f) < 0.01f ? 0 : (f < 0.0f ? 1 : 2);
-        if (afxMode != 0)
+        const bool rateMoved = ! masterValid || rate != appliedRate;
+        auto moved = [&] (uint32_t id) { return rateMoved || m[id] != appliedM[id]; };
+        if (moved (M::kitTune) || moved (M::kitDecay) || moved (M::chokeTime) || moved (M::scRelease))
         {
-            const float hz = f < 0.0f ? afxLowPassHz (f) : afxHighPassHz (f);
-            for (auto& s : afx)
-                s.setHz (hz, 2.0f - 1.9f * m[M::afxReso], r);
+            sh.kitTune = m[M::kitTune];
+            sh.kitDecay = std::exp2 (1.5f * m[M::kitDecay]);
+            sh.chokeCoef = decayCoef (chokeMs (m[M::chokeTime]) * 0.001f, r);
+            duckTick = std::exp (-(float) tick / (releaseMs (m[M::scRelease]) * 0.001f * r)); // back to 1/e of the dip in Release
         }
-        afxDrive = 1.0f + 4.0f * m[M::afxDrive];
-        afxNorm = m[M::afxDrive] > 0.0f ? 1.0f / tanhFast (afxDrive) : 1.0f;
-        volume = dbGain (m[M::volume]);
+        if (moved (M::revLevel) || moved (M::revTime) || moved (M::revPreDelay) || moved (M::revTone) || moved (M::revLowCut)
+            || moved (M::revMod))
+            reverb.set (revSeconds (m[M::revTime]), m[M::revTone], m[M::revPreDelay], lowCutHz (m[M::revLowCut]), m[M::revMod], m[M::revLevel]);
+        setDelay();
+        if (moved (M::comp) || moved (M::compAttack) || moved (M::compRelease) || moved (M::compMix) || moved (M::compKey)
+            || moved (M::scSource))
+        {
+            const float amount = m[M::comp];
+            compOn = amount > 0.0f;
+            compThr = -30.0f * amount;
+            const float ratio = 1.0f + 7.0f * amount;
+            compSlope = 1.0f - 1.0f / ratio;
+            scVoice = (int) m[M::scSource] - 1;
+            compKeyed = m[M::compKey] >= 0.5f && scVoice >= 0;
+            compMakeup = compKeyed ? 0.0f : -compThr * compSlope * 0.6f; // keyed, it only ducks
+            compAtk = 1.0f - std::exp (-1.0f / (compAttackMs (m[M::compAttack]) * 0.001f * r));
+            compRel = 1.0f - std::exp (-1.0f / (releaseMs (m[M::compRelease]) * 0.001f * r));
+            compMix = m[M::compMix];
+        }
+        if (moved (M::afxFilter) || moved (M::afxReso) || moved (M::afxDrive))
+        {
+            const float f = m[M::afxFilter];
+            afxMode = std::fabs (f) < 0.01f ? 0 : (f < 0.0f ? 1 : 2);
+            if (afxMode != 0)
+            {
+                const float hz = f < 0.0f ? afxLowPassHz (f) : afxHighPassHz (f);
+                for (auto& s : afx)
+                    s.setHz (hz, 2.0f - 1.9f * m[M::afxReso], r);
+            }
+            afxDrive = 1.0f + 4.0f * m[M::afxDrive];
+            afxNorm = m[M::afxDrive] > 0.0f ? 1.0f / tanhFast (afxDrive) : 1.0f;
+        }
+        if (moved (M::volume))
+            volume = dbGain (m[M::volume]);
         clip = (int) m[M::clip];
+        for (uint32_t i = 0; i < M::count; ++i)
+            appliedM[i] = m[i];
+        appliedRate = rate;
+        masterValid = true;
     }
     void setDelay()
     {
+        if (masterValid && bpm == appliedBpm && rate == appliedRate && m[M::dlyTime] == appliedM[M::dlyTime]
+            && m[M::dlyFeedback] == appliedM[M::dlyFeedback] && m[M::dlyTone] == appliedM[M::dlyTone]
+            && m[M::dlyMode] == appliedM[M::dlyMode] && m[M::dlyLevel] == appliedM[M::dlyLevel]
+            && m[M::dlyToRev] == appliedM[M::dlyToRev])
+            return;
         const double seconds = dlyTimeBeats[(int) m[M::dlyTime]] * 60.0 / bpm;
         delay.set (seconds, m[M::dlyFeedback], m[M::dlyTone], (int) m[M::dlyMode], m[M::dlyLevel], m[M::dlyToRev]);
+        appliedBpm = bpm;
     }
 
     // --- The transport ----------------------------------------------------------------------------------------------
@@ -166,6 +198,10 @@ struct Engine
     // At a block's start: playing or not, the song's place there (NaN: the host gives none), tempo, beats a bar.
     void transport (bool play, double beats, double tempo, double bar)
     {
+        if (std::isfinite (tempo) && tempo > 0.0)
+            tempo = std::min (std::max (tempo, 1.0), 1000.0); // a sane range only: the clock math divides and rounds by it
+        else
+            tempo = 0.0; // no usable tempo: keep the last one
         if (tempo > 0.0 && tempo != bpm)
         {
             if (playing)
@@ -361,7 +397,7 @@ struct Engine
                     voices[u].choke();
         sh.lfoBeats = lfoBeats();
         voice.trigger (h.velocity, h.accent, h.transpose, sh);
-        if (meterStrike) meterStrike (meterContext, v, h.velocity);
+        if (meterStrike) meterStrike (meterContext, v, h.velocity, (uint64_t) now);
         tickIdle = false;
         if (v == scVoice)
             duckEnv = 1.0f;

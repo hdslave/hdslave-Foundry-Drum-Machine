@@ -122,7 +122,8 @@ struct Reverb
             {
                 modPh[i] += modInc[i];
                 modPh[i] -= modPh[i] >= 1.0f ? 1.0f : 0.0f;
-                offset[i] = (float) len[i] + modDepth * 0.5f * (1.0f + sin2pi (modPh[i]));
+                // At Mod 0 the swing is exactly nothing; the phases still run, so Mod turned up later is as it was.
+                offset[i] = modDepth == 0.0f ? (float) len[i] : (float) len[i] + modDepth * 0.5f * (1.0f + sin2pi (modPh[i]));
             }
             float d[lines], sum = 0.0f;
             for (int i = 0; i < lines; ++i)
@@ -173,8 +174,8 @@ struct Delay
     float lpL = 0.0f, lpR = 0.0f, hpL = 0.0f, hpR = 0.0f, wow = 0.0f, wowInc = 0.0f;
     int mode = 0, quiet = 0, sleepAfter = 1;
     // The line's last `real` samples are what it would hold had it run on while it slept: the silence it wrote
-    // before sleeping, and what it has taken since. Older ones are from before that silence; a read about to reach
-    // them (the time turned up since) finds them zeroed first.
+    // before sleeping, and what it has taken since. Older ones are from before that silence and read as the
+    // silence those slept samples would have written, without zeroing the whole reach in one call.
     int real = 1;
     bool asleep = true;
     float rate = 48000.0f;
@@ -213,22 +214,11 @@ struct Delay
         at += at < 0.0f ? (float) size : 0.0f; // a hair under 0, plus the size, can round up to it: the guards
         const int i0 = (int) at;
         const float frac = at - (float) i0;
-        return b[(size_t) i0] + frac * (b[(size_t) i0 + 1] - b[(size_t) i0]);
-    }
-    // The samples `from` + 1 to `to` back from the write point zeroed (both lines), and the guards kept up.
-    void silence (int from, int to)
-    {
-        int at = w - to;
-        at += at < 0 ? size : 0;
-        for (int left = to - from; left > 0;)
-        {
-            const int run = std::min (left, size - at);
-            std::fill (bl.begin() + at, bl.begin() + at + run, 0.0f);
-            std::fill (br.begin() + at, br.begin() + at + run, 0.0f);
-            left -= run, at = 0;
-        }
-        bl[(size_t) size] = bl[0], bl[(size_t) size + 1] = bl[1];
-        br[(size_t) size] = br[0], br[(size_t) size + 1] = br[1];
+        // How far back the two taps sit; past `real` they are the silence slept through, not what the line holds.
+        const int back = w >= i0 ? w - i0 : w - i0 + size;
+        const float a = back <= real ? b[(size_t) i0] : 0.0f;
+        const float c = back - 1 <= real ? b[(size_t) i0 + 1] : 0.0f;
+        return a + frac * (c - a);
     }
     // Adds the echoes of `in` to left and right, and Delay > Reverb's share of them to `rev`.
     void process (const float* in, float* left, float* right, float* rev, int n)
@@ -243,12 +233,6 @@ struct Delay
             asleep = false, quiet = 0;
             cur = target;
         }
-        // The farthest back these samples read (the time between where it is and where it glides to, Tape's wow,
-        // the interpolation's next sample); the time does not move within a call.
-        const int reach = (int) (std::fmax (cur, target) * 1.004f) + 3;
-        if (reach > real)
-            silence (real, reach), real = reach;
-        const int from = s;
         for (; s < n; ++s)
         {
             cur += (target - cur) * 0.0007f;
@@ -278,6 +262,7 @@ struct Delay
             if (w < 2) // the guards keep up
                 bl[(size_t) (size + w)] = bl[(size_t) w], br[(size_t) (size + w)] = br[(size_t) w];
             w = w + 1 == size ? 0 : w + 1;
+            real = std::min (real + 1, size);
             left[s] += yl * level;
             right[s] += yr * level;
             rev[s] += (yl + yr) * 0.5f * toRev;
@@ -286,14 +271,15 @@ struct Delay
                 if (++quiet > sleepAfter)
                 {
                     asleep = true;
-                    real = std::min (quiet, size); // the silence it wrote; before that, what it played before going quiet
+                    real = std::min (quiet, size);
                     return;
                 }
             }
             else
                 quiet = 0;
         }
-        real = std::min (real + (n - from), size);
+        if (asleep)
+            real = std::min (quiet, size); // the silence it wrote; before that, what it played before going quiet
     }
 };
 } // namespace foundry

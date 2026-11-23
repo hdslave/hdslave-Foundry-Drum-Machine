@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.6.3"
+#define FOUNDRY_VERSION "0.6.4"
 #endif
 
 namespace foundry
@@ -278,6 +278,8 @@ struct ParamTable
     void add (uint32_t id, const char* prefix, const char* name, const char* module, float min, float max, float def, Kind kind,
               Unit unit, const char* const* choices = nullptr)
     {
+        if (count >= paramCount || id >= idLimit)
+            return; // a hand count drifted from the table's size: drop the row, never write past it
         Param& p = rows[count];
         p.id = id;
         if (prefix != nullptr)

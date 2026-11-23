@@ -7,6 +7,7 @@
 // WAV files into the output folder.
 //   host Foundry.clap OUT_FOLDER
 #include "wav.h"
+#include "../src/fx.h"
 #include "../src/melodee_screen.h"
 
 #include <clap/clap.h>
@@ -332,6 +333,8 @@ void testDescription()
     const auto* d = factory->get_plugin_descriptor (factory, 0);
     CHECK (d != nullptr && std::strcmp (d->id, "com.hdslave.foundry") == 0);
     CHECK (d != nullptr && std::strcmp (d->name, "hdslave Foundry") == 0);
+    // Player-visible text carries no hardware maker's product names (the models are numbered styles only).
+    CHECK (d == nullptr || d->description == nullptr || (std::strstr (d->description, "TR-") == nullptr && std::strstr (d->description, "Roland") == nullptr));
     bool instrument = false, drums = false;
     for (const char* const* f = d->features; *f; ++f)
         instrument |= std::strcmp (*f, CLAP_PLUGIN_FEATURE_INSTRUMENT) == 0, drums |= std::strcmp (*f, CLAP_PLUGIN_FEATURE_DRUM_MACHINE) == 0;
@@ -1654,6 +1657,176 @@ void testExtremes()
         }
 }
 
+// A model round-trip while the voice still rings (resonator style, the oscillator style, then back within 20 ms):
+// the third hit must be a fresh third hit, with nothing of the first strike frozen in a network the middle style
+// never runs. Noise parts are turned off, so the compared bodies are deterministic.
+void testModelRoundTrip()
+{
+    auto sequence = [] (int voice, std::vector<std::pair<std::string, double>> extra, double first, bool roundTrip) {
+        Instance i;
+        auto values = solo (voice);
+        values.push_back ({ "Clip", 0.0 });
+        values.insert (values.end(), extra.begin(), extra.end());
+        values.push_back ({ std::string (tags[voice]) + " Model", first });
+        i.setup (values);
+        const clap_id model = i.id (std::string (tags[voice]) + " Model");
+        const int key = padKey (voice);
+        std::vector<float> l, r;
+        i.render (960 + 9600, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            auto atFrame = [&] (uint64_t f, auto fn) { if (f >= at && f < at + n) fn ((uint32_t) (f - at)); };
+            if (roundTrip)
+            {
+                atFrame (0, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) key, 0.8); });
+                atFrame (400, [&] (uint32_t t) { e.param (t, model, 1.0); }); // the oscillator style
+                atFrame (480, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) key, 0.8); });
+                atFrame (880, [&] (uint32_t t) { e.param (t, model, first); });
+            }
+            atFrame (960, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) key, 0.8); });
+            e.sort();
+        });
+        return l;
+    };
+    struct Case { int voice; std::vector<std::pair<std::string, double>> extra; double first; };
+    const Case cases[] = {
+        { 0, { { "BD Attack", 1.0 }, { "BD Decay", 0.7 } }, 2.0 },
+        { 2, { { "SD Snappy", 0.0 }, { "SD Decay", 0.7 } }, 0.0 },
+        { 4, { { "LT Osc Mix", 0.0 }, { "LT Color", 0.0 }, { "LT Decay", 0.7 } }, 0.0 },
+    };
+    for (const auto& c : cases)
+    {
+        const auto tripped = sequence (c.voice, c.extra, c.first, true);
+        const auto fresh = sequence (c.voice, c.extra, c.first, false);
+        const double a = energyOf (tripped, 960, 960 + 9600), b = energyOf (fresh, 960, 960 + 9600);
+        CHECK_MSG (b > 1e-6 && a > 0.75 * b && a < 1.33 * b, "%s: round-trip third hit %g, fresh %g", tags[c.voice], a, b);
+    }
+}
+
+// A voice retriggered while its choke fade is still running starts from silence again: Attack Time fades the new
+// hit in as it would a fresh one (its state was cleared, so a full-level restart would click).
+void testRetriggerFromFade()
+{
+    auto render = [] (bool chokedFirst) {
+        Instance i;
+        auto values = solo (0);
+        values.insert (values.end(), { { "BD Attack Time", 1.0 }, { "Clip", 0.0 } });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.render (2400 + 9600, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            auto atFrame = [&] (uint64_t f, auto fn) { if (f >= at && f < at + n) fn ((uint32_t) (f - at)); };
+            if (chokedFirst)
+            {
+                atFrame (0, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 0.8); });
+                atFrame (2000, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_CHOKE, (int16_t) padKey (0), 0.0); });
+            }
+            atFrame (2400, [&] (uint32_t t) { e.note (t, CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 0.8); });
+            e.sort();
+        });
+        return l;
+    };
+    const auto retriggered = render (true), fresh = render (false);
+    const double a = energyOf (retriggered, 2400, 2400 + 480), b = energyOf (fresh, 2400, 2400 + 480);
+    CHECK_MSG (b > 0.0 && a > 0.6 * b && a < 1.6 * b, "retriggered from fade %g, fresh %g (first 10 ms)", a, b);
+}
+
+// The send effects fall asleep on a sample inside a tick; a send later in that same tick must still be taken
+// (engine-level: the exact boundary sample cannot be placed from outside). An impulse is put a few quiet samples
+// past where each effect gives up, inside one 16-sample call, and its echo/tail must appear.
+#if 0 // phase-A only: enabled with the fix it tests
+void testFxSleepBoundary()
+{
+    float in[16] {}, left[16] {}, right[16] {}, rev[16] {};
+    auto zeros16 = [&] { std::fill (std::begin (in), std::end (in), 0.0f); };
+    {
+        foundry::Delay d;
+        d.prepare (48000.0f);
+        d.set (0.001, 0.0f, 0.6f, 0, 0.5f, 0.0f);
+        zeros16(); in[0] = 1.0f;
+        d.process (in, left, right, rev, 16);
+        zeros16();
+        for (int guard = 0; guard < 100000 && d.quiet < d.sleepAfter - 64; ++guard)
+            d.process (in, left, right, rev, 16);
+        for (int guard = 0; guard < 100000 && d.quiet < d.sleepAfter - 4; ++guard)
+            d.process (in, left, right, rev, 1);
+        CHECK (! d.asleep && d.quiet >= d.sleepAfter - 4);
+        in[10] = 1.0f; // falls asleep about sample 5 of this call; the impulse at 10 must not be dropped
+        d.process (in, left, right, rev, 16);
+        zeros16();
+        double peak = 0.0;
+        for (int k = 0; k < 32; ++k)
+        {
+            std::fill (std::begin (left), std::end (left), 0.0f);
+            d.process (in, left, right, rev, 16);
+            for (float s : left) peak = std::max (peak, (double) std::fabs (s));
+        }
+        CHECK_MSG (peak > 0.1, "delay echo of the boundary impulse peaks %g", peak);
+    }
+    {
+        foundry::Reverb reverbFx;
+        reverbFx.prepare (48000.0f);
+        reverbFx.set (0.3f, 0.5f, 0.0f, 100.0f, 0.0f, 0.5f);
+        zeros16(); in[0] = 1.0f;
+        reverbFx.process (in, left, right, 16);
+        zeros16();
+        for (int guard = 0; guard < 200000 && reverbFx.quiet < reverbFx.sleepAfter - 64; ++guard)
+            reverbFx.process (in, left, right, 16);
+        for (int guard = 0; guard < 100000 && reverbFx.quiet < reverbFx.sleepAfter - 4; ++guard)
+            reverbFx.process (in, left, right, 1);
+        CHECK (! reverbFx.asleep && reverbFx.quiet >= reverbFx.sleepAfter - 4);
+        in[10] = 1.0f;
+        reverbFx.process (in, left, right, 16);
+        zeros16();
+        double peak = 0.0;
+        for (int k = 0; k < 600; ++k)
+        {
+            std::fill (std::begin (left), std::end (left), 0.0f);
+            std::fill (std::begin (right), std::end (right), 0.0f);
+            reverbFx.process (in, left, right, 16);
+            for (float s : left) peak = std::max (peak, (double) std::fabs (s));
+            for (float s : right) peak = std::max (peak, (double) std::fabs (s));
+        }
+        CHECK_MSG (peak > 1e-4, "reverb tail of the boundary impulse peaks %g", peak);
+    }
+}
+#endif
+
+// Raw MIDI panic (a host that sends MIDI, not CLAP notes): CC 120 and CC 123 silence the kit. Non-finite and
+// extreme tempos from the transport must neither hang nor make unbounded output.
+void testRawMidiPanicAndTempo()
+{
+    for (uint8_t cc : { (uint8_t) 120, (uint8_t) 123 })
+    {
+        Instance i;
+        auto values = solo (8);
+        values.push_back ({ "OH Decay", 0.8 });
+        i.setup (values);
+        std::vector<float> l, r;
+        i.render (48000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            if (at == 0)
+                e.midi (0, 0x90, (uint8_t) padKey (8), 100);
+            if (12000 >= at && 12000 < at + n)
+                e.midi ((uint32_t) (12000 - at), 0xb0, cc, 0);
+            e.sort();
+        });
+        CHECK_MSG (energyOf (l, 0, 12000) > 1e-4 && peakOf (l, 14400) < 1e-6, "CC %u: peak after %g", cc, peakOf (l, 14400));
+    }
+    for (double bpm : { std::numeric_limits<double>::infinity(), 0.001, 1.0e9 })
+    {
+        Instance i;
+        i.setup ({ { "BD Sub-Step", 2.0 }, { "SD Flam", 10.0 }, { "CP Delay", 0.5 } });
+        std::vector<float> l, r;
+        i.render (48000, 128, l, r, [bpm] (uint64_t) { return Transport { true, bpm, 0.0 }; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            for (uint64_t f = 0; f < 48000; f += 12000)
+                if (f >= at && f < at + n)
+                {
+                    e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 0.8);
+                    e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (2), 0.8);
+                }
+            e.sort();
+        });
+        CHECK_MSG (finiteBounded (l, 1.0) && finiteBounded (r, 1.0), "bpm %g", bpm);
+    }
+}
+
 // Silence costs nothing and stays silence: no notes, zeros.
 void testSilence()
 {
@@ -1733,6 +1906,9 @@ int main (int argc, char** argv)
     testEffects();
     testDelayWake();
     testBlockSizes();
+    testModelRoundTrip();
+    testRetriggerFromFade();
+    testRawMidiPanicAndTempo();
     testExtremes();
     testSilence();
     writeDemos (argv[2]);

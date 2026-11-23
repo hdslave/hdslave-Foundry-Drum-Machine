@@ -24,8 +24,8 @@ const char* const features[] = { CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEA
 
 const clap_plugin_descriptor descriptor {
     CLAP_VERSION, "com.hdslave.foundry", "hdslave Foundry", "hdslave", "", "", "", FOUNDRY_VERSION,
-    "Sixteen analog-style drum voices, each an 808, 909 or 606 style circuit with the TR-1000's controls and more, "
-    "with reverb, delay, side chain, bus compression and an analog-style filter",
+    "Sixteen analog-style drum voices, each switchable between three circuit styles, with per-voice shaping, "
+    "reverb, delay, side chain, bus compression and an analog-style filter",
     features,
 };
 
@@ -166,6 +166,9 @@ void handle (Plugin& p, const clap_event_header* e)
             const auto* m = reinterpret_cast<const clap_event_midi*> (e);
             if ((m->data[0] & 0xf0) == 0x90 && m->data[2] > 0)
                 p.engine.note (m->data[1] & 0x7f, (float) (m->data[2] & 0x7f) / 127.0f);
+            // A raw-MIDI host's panic (the CLAP host sends these as chokes too): every voice fades.
+            else if ((m->data[0] & 0xf0) == 0xb0 && ((m->data[1] & 0x7f) == 120 || (m->data[1] & 0x7f) == 123))
+                p.engine.chokeKey (-1);
             break;
         }
         default: break;
@@ -264,7 +267,7 @@ bool stateLoad (const clap_plugin* plugin, const clap_istream* stream)
     if (! readAll (stream, tag, 4) || std::memcmp (tag, stateTag, 4) != 0 || ! readAll (stream, header, sizeof (header))
         || header[0] == 0 || header[1] > 8192)
         return false;
-    static float loaded[paramCount]; // main thread only
+    float loaded[paramCount]; // main thread only
     for (uint32_t i = 0; i < paramCount; ++i)
         loaded[i] = table().rows[i].def;
     for (uint32_t i = 0; i < header[1]; ++i)
@@ -295,7 +298,7 @@ bool presetFromLocation (const clap_plugin* plugin, uint32_t kind, const char*, 
             hostPresets->on_error (p.host, kind, nullptr, key, 0, "no such preset");
         return false;
     }
-    static float values[paramCount]; // main thread only
+    float values[paramCount]; // main thread only
     presetValuesOf (*preset, values);
     setAll (p, values);
     if (const auto* hostParams = static_cast<const clap_host_params*> (p.host->get_extension (p.host, CLAP_EXT_PARAMS)))
@@ -365,9 +368,9 @@ bool pluginInit (const clap_plugin* plugin)
     if (p.hostScreen && p.hostScreen->request_paint)
     {
         p.engine.meterContext = &p;
-        p.engine.meterStrike = [] (void* ctx, int voice, float strength) {
+        p.engine.meterStrike = [] (void* ctx, int voice, float strength, uint64_t sample) {
             auto& owner = *static_cast<Plugin*> (ctx);
-            owner.meter.strike (voice, strength);
+            owner.meter.strike (voice, strength, (uint64_t) ((double) sample * 1000.0 / owner.engine.rate));
             owner.blockChanged = true;
         };
     }
@@ -391,6 +394,8 @@ void pluginDestroy (const clap_plugin* plugin)
 
 bool pluginActivate (const clap_plugin* plugin, double rate, uint32_t, uint32_t maxFrames)
 {
+    if (! std::isfinite (rate) || rate <= 0.0)
+        return false;
     auto& p = of (plugin);
     p.engine.prepare (rate, maxFrames);
     p.active = true;
@@ -450,7 +455,8 @@ clap_process_status pluginProcess (const clap_plugin* plugin, const clap_process
     {
         const bool playing = (t->flags & CLAP_TRANSPORT_IS_PLAYING) != 0;
         const bool placed = (t->flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) != 0;
-        const double bpm = (t->flags & CLAP_TRANSPORT_HAS_TEMPO) && t->tempo > 0.0 ? t->tempo : 120.0;
+        const double bpm = (t->flags & CLAP_TRANSPORT_HAS_TEMPO) && std::isfinite (t->tempo) && t->tempo > 0.0
+                               ? std::min (std::max (t->tempo, 1.0), 1000.0) : 120.0;
         const double beats = placed ? (double) t->song_pos_beats / (double) CLAP_BEATTIME_FACTOR : __builtin_nan ("");
         double bar = 4.0;
         if ((t->flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE) && t->tsig_num > 0 && t->tsig_denom > 0)
