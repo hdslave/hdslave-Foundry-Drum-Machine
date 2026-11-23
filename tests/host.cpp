@@ -8,6 +8,7 @@
 //   host Foundry.clap OUT_FOLDER
 #include "wav.h"
 #include "../src/fx.h"
+#include "../src/params.h"
 #include "../src/melodee_screen.h"
 
 #include <clap/clap.h>
@@ -1807,22 +1808,49 @@ void testRawMidiPanicAndTempo()
         });
         CHECK_MSG (energyOf (l, 0, 12000) > 1e-4 && peakOf (l, 14400) < 1e-6, "CC %u: peak after %g", cc, peakOf (l, 14400));
     }
-    for (double bpm : { std::numeric_limits<double>::infinity(), 0.001, 1.0e9 })
-    {
+    // Boundedness at hostile tempos, and the clamp itself: an out-of-range tempo must render exactly as
+    // the tempo it clamps to does (a non-finite one as the 120 default), echo for echo. Boundedness alone
+    // passed on 0.6.3, which ran its delay and sub-steps at the raw tempo; the equality half is the proof.
+    const auto renderAt = [] (double bpm) {
         Instance i;
-        i.setup ({ { "BD Sub-Step", 2.0 }, { "SD Flam", 10.0 }, { "CP Delay", 0.5 } });
+        i.setup ({ { "BD Sub-Step", 2.0 }, { "SD Flam", 10.0 }, { "CP Delay", 0.6 },
+                   { "Delay Time", 8.0 }, { "Delay Feedback", 0.5 } });
         std::vector<float> l, r;
-        i.render (48000, 128, l, r, [bpm] (uint64_t) { return Transport { true, bpm, 0.0 }; }, [&] (uint64_t at, uint32_t n, Events& e) {
-            for (uint64_t f = 0; f < 48000; f += 12000)
+        i.render (96000, 128, l, r, [bpm] (uint64_t) { return Transport { true, bpm, 0.0 }; }, [&] (uint64_t at, uint32_t n, Events& e) {
+            for (uint64_t f = 0; f < 96000; f += 12000)
                 if (f >= at && f < at + n)
                 {
                     e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 0.8);
                     e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (2), 0.8);
+                    e.note ((uint32_t) (f - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (3), 0.8);
                 }
             e.sort();
         });
-        CHECK_MSG (finiteBounded (l, 1.0) && finiteBounded (r, 1.0), "bpm %g", bpm);
+        return std::make_pair (l, r);
+    };
+    for (auto [hostile, clamped] : { std::pair { std::numeric_limits<double>::infinity(), 120.0 },
+                                     std::pair { 1.0e9, 1000.0 }, std::pair { 0.001, 1.0 } })
+    {
+        const auto wild = renderAt (hostile), tame = renderAt (clamped);
+        CHECK_MSG (finiteBounded (wild.first, 1.0) && finiteBounded (wild.second, 1.0), "bpm %g", hostile);
+        CHECK_MSG (same (wild.first, tame.first) && same (wild.second, tame.second),
+                   "bpm %g renders as %g", hostile, clamped);
     }
+}
+
+// The parameter table refuses rows past its size and ids past its map: a count drifting from paramCount
+// must drop the row, never write past the arrays (the sanitize build watches those writes).
+void testParamTableGuard()
+{
+    foundry::ParamTable t {};
+    for (auto& r : t.row)
+        r = -1;
+    for (uint32_t id = 0; id < foundry::paramCount + 8; ++id)
+        t.cont (id, nullptr, "X", "T", 0.0f, 1.0f, 0.0f, foundry::Unit::percent);
+    CHECK (t.count == foundry::paramCount);
+    t.cont (foundry::idLimit + 64, nullptr, "Y", "T", 0.0f, 1.0f, 0.0f, foundry::Unit::percent);
+    CHECK (t.count == foundry::paramCount);
+    CHECK (foundry::table().count == foundry::paramCount);
 }
 
 // Silence costs nothing and stays silence: no notes, zeros.
@@ -1908,6 +1936,7 @@ int main (int argc, char** argv)
     testRetriggerFromFade();
     testFxSleepBoundary();
     testRawMidiPanicAndTempo();
+    testParamTableGuard();
     testExtremes();
     testSilence();
     writeDemos (argv[2]);

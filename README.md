@@ -343,12 +343,13 @@ Still estimates:
 
 ## Cost
 
-Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind):
+Instructions a 128-frame block takes, from `tools/bench.sh` (callgrind, its default 4-second runs; the
+beat's per-block average depends on the run's length, so the duration is part of the figure):
 
 | Case | Instructions | Share of one A55 core at 1 instruction a cycle |
 |---|---|---|
 | All sixteen voices on every 1/16 with long decays, every effect, the compressor, analog filter and drive | about 583,000 | 12.1 % |
-| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 121,000 | 2.5 % |
+| A beat (kick, snare, hats, clap) with reverb, delay and the compressor | about 129,000 | 2.7 % |
 | Stopped | about 3,700 | 0.08 % |
 
 A voice costs nothing once it has died away, and the reverb and delay sleep while they have nothing to play. The
