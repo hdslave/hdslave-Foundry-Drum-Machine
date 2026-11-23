@@ -4,6 +4,8 @@
 
 ![Foundry X0X Drum Works screen running in hdslaveOS](docs/foundry-screen.gif)
 
+> **Desktop version (macOS & Windows):** Looking to run this plug-in on your computer in FL Studio or another CLAP host with an expanded high-resolution control panel and MIDI Learn? Get the full 11-plug-in desktop suite at [**hdslave-Synths-and-drum-machines-Mac-Win**](https://github.com/hdslave/hdslave-Synths-and-drum-machines-Mac-Win).
+
 Built for the Akai MPC Sample running [Melodee](https://github.com/keremimo/melodee-sample) / [hdslaveOS](https://github.com/hdslave/hdslaveOS) (64-bit ARM Linux, Cortex-A55). Hosts list it as **hdslave Foundry** (id `com.hdslave.foundry`).
 
 Every pad is a dedicated circuit-modelled drum voice (kick, snare, tom, rim, clap, hat, cymbal, cowbell, claves, maracas) switchable between **808**, **909**, and **606** models — with TR-1000-style analog and circuit-bent (8X/9X) controls, classic hardware-mod controls on the 606 kit (see [The 606 and its mods](#the-606-and-its-mods)), a shared per-voice chain (bend, drive, filter + envelope, amp attack/gate, sends), and per-note performance tools (probability, cycles, flam, sub-steps, nudge), plus reverb, delay, bus compression, and a dedicated kick-only **SC Key** sidechain output for hdslaveOS's master compressor.
