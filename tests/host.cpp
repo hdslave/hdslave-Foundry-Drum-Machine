@@ -51,8 +51,11 @@ const void* hostExtension (const clap_host*, const char* id)
         [] (const clap_host*, uint32_t, const char*, const char*, int32_t, const char*) { ++presetErrors; },
         [] (const clap_host*, uint32_t, const char*, const char*) { ++presetsLoaded; },
     };
-    static const clap_host_melodee_screen screen { [] (const clap_host*) { ++paints; } };
-    if (std::strcmp (id, CLAP_EXT_MELODEE_SCREEN_HOST) == 0) return &screen;
+    static const melodee_screen_host_t screen { [] (const void*, uint32_t flags) {
+        ++paints;
+        if (flags & MELODEE_SCREEN_RUN) ++processRequests;
+    } };
+    if (std::strcmp (id, MELODEE_SCREEN_CLAP_HOST) == 0) return &screen;
     if (std::strcmp (id, CLAP_EXT_LOG) == 0) return &log;
     if (std::strcmp (id, CLAP_EXT_PARAMS) == 0) return &params;
     if (std::strcmp (id, CLAP_EXT_PRESET_LOAD) == 0) return &presetLoad;
@@ -392,24 +395,27 @@ void testDrumMap (const char* path)
 void testScreen()
 {
     Instance i;
-    const auto* ui = static_cast<const clap_plugin_melodee_screen*> (i.plugin->get_extension (i.plugin, CLAP_EXT_MELODEE_SCREEN));
+    const auto* ui = static_cast<const melodee_screen_t*> (i.plugin->get_extension (i.plugin, MELODEE_SCREEN_CLAP));
     CHECK (ui);
     if (!ui) return;
     auto input = [&] (uint32_t kind, int value) {
-        melodee_screen_input event { kind, value, false };
+        melodee_screen_input_t event { kind, value, false };
         return ui->input (i.plugin, &event);
     };
     auto knobs = [&] {
         std::array<clap_id, 3> ids;
-        ui->knobs (i.plugin, ids.data());
+        ui->controls (i.plugin, ids.data());
         return ids;
     };
     const uint32_t guard = 0x12345678, stride = 325;
     std::vector<uint32_t> pixels (stride*218 + 2, guard);
-    melodee_screen_canvas c {};
+    melodee_screen_frame_t c {};
     c.width = 320; c.height = 218; c.stride = stride; c.pixels = pixels.data()+1;
-    for (auto& k : c.knobs) k.position = -1;
-    auto paint = [&] (bool whole = false) { c.whole = whole; return ui->paint (i.plugin, &c); };
+    std::fill_n (c.pots, 3, -1);
+    auto paint = [&] (bool whole = false) { c.redraw_all = whole; return ui->draw (i.plugin, &c); };
+    c.area = MELODEE_SCREEN_STRIP;
+    CHECK (!paint (true) && std::all_of (pixels.begin(), pixels.end(), [=] (uint32_t p) { return p == guard; }));
+    c.area = MELODEE_SCREEN_PAGE;
     CHECK (paint (true));
     CHECK (!paint());
     for (unsigned y = 0; y < c.height; ++y)
@@ -420,9 +426,9 @@ void testScreen()
     CHECK (pixels.front() == guard && pixels.back() == guard);
     // Check the actual ink on every bank, including long names and values with descenders.
     // Exercise the rail at both ends and in the middle beside the diagonal card dividers.
-    c.knobs[0] = { 0, false };
-    c.knobs[1] = { 64, true };
-    c.knobs[2] = { 127, true };
+    c.pots[0] = 0;
+    c.pots[1] = 64; c.pots_live[1] = 1;
+    c.pots[2] = 127; c.pots_live[2] = 1;
     const uint32_t silver = c.pixels[184 * stride];
     auto clearBand = [&] (int x, int y, int width, int height) {
         for (int j = 0; j < height; ++j)
@@ -455,14 +461,15 @@ void testScreen()
                 CHECK (clearBand (x, 212, 94, 1));
             }
             CHECK (clearBand (0, 215, 320, 3)); // place bar
-            CHECK (input (MELODEE_SCREEN_NUDGE, 1));
+            CHECK (input (MELODEE_SCREEN_STEP, 1));
         } while (++banks < 40 && knobs() != first);
         CHECK (banks < 40);
         CHECK (input (MELODEE_SCREEN_WHEEL, 1));
     }
     for (const auto& p : i.ids) CHECK (available.count (p.second) == 1);
     CHECK (!input (99, 0));
-    for (auto& k : c.knobs) k = { -1, false };
+    std::fill_n (c.pots, 3, -1);
+    std::fill_n (c.pots_live, 3, 0);
     CHECK (input (MELODEE_SCREEN_WHEEL, 1)); // A02, snare
     CHECK (paint());
     const auto idle = pixels;
@@ -475,16 +482,16 @@ void testScreen()
     int before = paints;
     CHECK (paint() && pixels != idle && paints > before);
     before = paints;
-    c.now_ms += 45;
+    c.time_ms += 45;
     CHECK (paint() && paints > before); // self-schedules with no further process call
-    c.now_ms += 2100;
+    c.time_ms += 2100;
     CHECK (paint() && pixels == idle);
     CHECK (!paint());
     i.setup ({ { "SD Level", -18.0 } });
     CHECK (paint() && pixels != idle); // automation reaches the displayed card
-    c.knobs[0] = { 22, false };
+    c.pots[0] = 22;
     CHECK (paint());
-    c.knobs[0].engaged = true;
+    c.pots_live[0] = true;
     CHECK (paint());
     c.shift = true;
     CHECK (paint());
@@ -494,11 +501,11 @@ void testScreen()
     auto* q = quiet.plugin;
     quiet.setup ({ { "BD Prob", 0 } });
     quiet.play (256, { { 0, 36, 1 } }, l, r);
-    c.now_ms = 0; c.whole = true; c.shift = false;
+    c.time_ms = 0; c.redraw_all = true; c.shift = false;
     before = paints;
-    CHECK (ui->paint (q, &c) && paints == before);
+    CHECK (ui->draw (q, &c) && paints == before);
     quiet.setup ({ { "BD Prob", 1 } });
-    melodee_screen_input tap { MELODEE_SCREEN_PUSH, 0, false };
+    melodee_screen_input_t tap { MELODEE_SCREEN_PUSH, 0, false };
     CHECK (ui->input (q, &tap));
     std::this_thread::sleep_for (std::chrono::milliseconds (520));
     quiet.play (256, {}, l, r);
@@ -507,7 +514,7 @@ void testScreen()
     // An audition plays the voice whatever its Prob or Cycle: a bass drum at Prob 0 still sounds on the page's Push.
     Instance never;
     never.setup ({ { "BD Prob", 0 } });
-    melodee_screen_input push { MELODEE_SCREEN_PUSH, 0, false };
+    melodee_screen_input_t push { MELODEE_SCREEN_PUSH, 0, false };
     CHECK (ui->input (never.plugin, &push));
     never.play (1024, {}, l, r);
     CHECK (peakOf (l) > 0.01);

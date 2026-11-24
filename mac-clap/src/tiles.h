@@ -83,15 +83,15 @@ struct TilesAccess
         g.box (x + 4, y + h - 3, std::max (1, fill), 2, Screen::acid);
     }
 
-    static bool CLAP_ABI paint (const clap_plugin_t* plugin, uint32_t tile, const melodee_screen_canvas_t* canvas, clap_id knobs_out[3])
+    static bool CLAP_ABI paint (const clap_plugin_t* plugin, uint32_t tile, const melodee_screen_frame_t* canvas, clap_id knobs_out[3])
     {
         if (tile >= kTileCount || !canvas || !canvas->pixels) return false;
         auto& p = of (plugin);
 
         if (tile == 0)
         {
-            melodee_screen_canvas_t c = *canvas;
-            c.whole = true;
+            melodee_screen_frame_t c = *canvas;
+            c.redraw_all = 1;
             p.screen.dirty = true;
             const bool drew = p.screen.paint (c, p.values, p.meter, true);
             if (knobs_out)

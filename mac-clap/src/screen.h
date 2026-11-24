@@ -72,7 +72,7 @@ struct Paper
     uint32_t stride;
     void box (int x, int y, int w, int h, uint32_t ink) const
     {
-        h = std::min (h, MELODEE_SCREEN_HEIGHT - y);
+        h = std::min (h, MELODEE_SCREEN_PAGE_HEIGHT - y);
         for (int j = 0; j < h; ++j) std::fill_n (pixels + (y+j)*stride + x, w, ink);
     }
     void print (int x, int y, int w, int h, int sx, int sy) const
@@ -120,18 +120,18 @@ struct Screen
     int voiceBanks() const { return (voiceRows() + 2) / 3; }
     int bankCount() const { return voiceBanks() + (M::count + 2) / 3; }
 
-    void knobs (clap_id ids[3]) const
+    void knobs (uint32_t ids[3]) const
     {
         const int first = paramIndex (voiceId (voice(), V::level));
         for (int i = 0; i < 3; ++i)
         {
             const int row = bank * 3 + i;
             if (bank < voiceBanks())
-                ids[i] = row < voiceRows() ? table().rows[first + row].id : CLAP_INVALID_ID;
+                ids[i] = row < voiceRows() ? table().rows[first + row].id : MELODEE_SCREEN_NO_CONTROL;
             else
             {
                 const unsigned kit = (bank - voiceBanks()) * 3 + i;
-                ids[i] = kit < M::count ? kit : CLAP_INVALID_ID;
+                ids[i] = kit < M::count ? kit : MELODEE_SCREEN_NO_CONTROL;
             }
         }
     }
@@ -142,7 +142,7 @@ struct Screen
             pad = (pad + delta % voiceCount + voiceCount) % voiceCount;
             bank = 0;
         }
-        else if (kind == MELODEE_SCREEN_NUDGE)
+        else if (kind == MELODEE_SCREEN_STEP)
         {
             const int n = bankCount();
             bank = (bank + delta % n + n) % n;
@@ -232,13 +232,13 @@ struct Screen
             }
         }
     }
-    void cards (const Paper& g, const std::atomic<float>* values, const melodee_screen_canvas& c) const
+    void cards (const Paper& g, const std::atomic<float>* values, const melodee_screen_frame_t& c) const
     {
-        clap_id ids[3];
+        uint32_t ids[3];
         knobs (ids);
         for (int k = 0; k < 3; ++k)
         {
-            if (ids[k] == CLAP_INVALID_ID) continue;
+            if (ids[k] == MELODEE_SCREEN_NO_CONTROL) continue;
             const int idx = paramIndex (ids[k]), x = 10 + k*106;
             const auto& p = table().rows[idx];
             const float value = values[idx].load (std::memory_order_relaxed);
@@ -248,49 +248,49 @@ struct Screen
             // Keep four clear rows (194–197) between the badges and values. Even a
             // descender in "Ping-Pong" clears the pot rail and Melodee's bottom place bar.
             g.box (x, 185, 17, 9, night);
-            g.text (x+1, 186, key, c.knobs[k].engaged ? acid : paper);
+            g.text (x+1, 186, key, c.pots_live[k] ? acid : paper);
             g.text (x+21, 185, name, night, 73, true);
             char buf[48];
             formatParam (p, value, buf, sizeof buf);
             if (bank == 0 && std::round (value) == value && (p.unit == Unit::db || p.unit == Unit::semitones) && value > silentDb)
                 std::snprintf (buf, sizeof buf, "%.0f %s", value, p.unit == Unit::db ? "dB" : "st");
             g.text (x, 198, buf, night, 91, false, 10);
-            if (c.knobs[k].position >= 0)
+            if (c.pots[k] >= 0)
             {
                 g.box (x, 214, 91, 1, 0xff8596a0);
-                const int knob = std::clamp<int> (c.knobs[k].position, 0, 127);
-                g.box (x+knob*89/127, 213, 2, 2, c.knobs[k].engaged ? night : 0xff477c93);
+                const int knob = std::clamp<int> (c.pots[k], 0, 127);
+                g.box (x+knob*89/127, 213, 2, 2, c.pots_live[k] ? night : 0xff477c93);
             }
         }
     }
 
-    bool paint (const melodee_screen_canvas& c, const std::atomic<float>* values, const HitMeter& meter, bool changed)
+    bool paint (const melodee_screen_frame_t& c, const std::atomic<float>* values, const HitMeter& meter, bool changed)
     {
         for (int i = 0; i < 3; ++i)
         {
-            const int pot = (c.knobs[i].position + 1)*2 + c.knobs[i].engaged;
+            const int pot = (c.pots[i] + 1)*2 + c.pots_live[i];
             if (pot != previousPot[i]) dirty = true;
             previousPot[i] = pot;
         }
         dirty |= shifted != c.shift || changed;
         shifted = c.shift;
-        if (!c.whole && !dirty && (!moving || c.now_ms-lastPaint < 40)) return false;
+        if (!c.redraw_all && !dirty && (!moving || c.time_ms-lastPaint < 40)) return false;
         History history;
         // The canvas clock and the audio meter clock are both monotonic but have different origins.
-        if (!clockSet || c.now_ms < lastPaint)
+        if (!clockSet || c.time_ms < lastPaint)
         {
             clockSet = true;
-            canvasOrigin = c.now_ms;
+            canvasOrigin = c.time_ms;
             meterOrigin = clockMs();
         }
-        readHits (history, meter, meterOrigin + (c.now_ms - canvasOrigin));
+        readHits (history, meter, meterOrigin + (c.time_ms - canvasOrigin));
         moving = history.count > 0;
         Paper g { c.pixels, c.stride };
         g.print (0, 0, 320, 181, 0, 0);
         int model = int (values[paramIndex (voiceId (voice(), V::model))].load (std::memory_order_relaxed));
         panel (g, history, model);
         dirty = false;
-        lastPaint = c.now_ms;
+        lastPaint = c.time_ms;
         return true;
     }
 };

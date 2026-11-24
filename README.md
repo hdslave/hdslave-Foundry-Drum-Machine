@@ -53,7 +53,7 @@ being its pitch. Set it to BD for an 808 bass line (the **808 Bass Keys** preset
 
 ## X0X Drum Works screen
 
-In hdslaveOS, Foundry draws the X0X Drum Works panel on Edit and Stage. The sixteen pads light in playing order.
+Foundry uses the Melodee 0.7 screen SDK for its X0X Drum Works panel on Edit and Stage PANEL. The sixteen pads light in playing order.
 A kick pushes the chrome face forward, a snare offsets its blue outline, and the metal voices flare the rays.
 The four lanes below show the last two seconds of strikes by velocity, including linked voices, flams and sub-steps.
 One lane follows the selected pad and the others follow recent voices.
@@ -410,5 +410,6 @@ Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on t
 empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
 
-This is version 0.6.4. It has not yet been run on the MPC: every check above ran in the build container and in
-hdslaveOS's host tools, not on the device.
+Version 0.6.5 uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
+A01–A16 drum map and can use Foundry’s second stereo output, SC Key, for the master compressor.
+Physical MPC testing is pending.
