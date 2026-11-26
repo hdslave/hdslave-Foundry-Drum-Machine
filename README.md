@@ -396,7 +396,8 @@ The tests load the plug-in through the CLAP API and check:
   80 ms Nudge, the rim's O1 – O3 Tune and Decay, the toms' Detail, Attack and Tone;
 - Prob (the same twice), Cycle, 1st Only, Flam, Sub-Step, Nudge, Humanize, Link, and a linked layer humanized with
   its note;
-- the Keys voice's pitch, Tune, Kit Tune, the GM map, MIDI notes;
+- the Keys voice's pitch, Tune, Kit Tune, the GM map (every key from 0 to 127: only the keys the table names
+  play, so key 0 is silent), MIDI notes;
 - the side chain three ways; the reverb, ping-pong delay, analog filter, compressor and Limit; the delay's time
   turned while it sleeps (its next echo on time and at pitch, nothing from before it went quiet);
 - the same output whatever the block size (1, 37, 128, 4096 frames, settings and notes on the first frame too);
@@ -419,6 +420,6 @@ Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on t
 empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
 
-Version 0.6.5 uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
+Version 0.6.6. Since 0.6.5 it uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
 A01–A16 drum map and can use Foundry’s second stereo output, SC Key, for the master compressor.
 Physical MPC testing is pending.

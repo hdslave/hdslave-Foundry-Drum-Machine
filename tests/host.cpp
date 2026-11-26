@@ -1395,6 +1395,36 @@ void testKeysAndMaps()
         i.play (12000, { { 0, key, 0.75 } }, l, r);
         CHECK_MSG (peakOf (l) > 0.05, "key %d voice %d", key, voice);
     }
+    // GM: a voice's key list ends at its -1; the unused places after it are zeros, which name no key. So key 0 plays
+    // nothing (to 0.6.5 it played the Bass Drum), and every key plays exactly when a list names it.
+    {
+        std::set<int> named;
+        for (const auto& spec : foundry::voiceSpecs)
+            for (int8_t k : spec.gm)
+            {
+                if (k < 0)
+                    break;
+                named.insert (k);
+            }
+        CHECK (named.size() == 31 && named.count (0) == 0 && *named.begin() == 35 && *named.rbegin() == 77);
+        for (int key = 0; key < 128; ++key)
+        {
+            Instance i;
+            i.setup ({ { "Key Map", 1.0 } });
+            std::vector<float> l, r;
+            i.play (4800, { { 0, key, 0.75 } }, l, r);
+            const bool sounds = peakOf (l) > 0.0 || peakOf (r) > 0.0;
+            CHECK_MSG (sounds == (named.count (key) != 0), "GM key %d %s", key, sounds ? "plays a voice" : "is silent");
+        }
+        // And it was the Bass Drum: alone in the mix, key 0 is silent too.
+        Instance bd;
+        auto values = solo (0);
+        values.push_back ({ "Key Map", 1.0 });
+        bd.setup (values);
+        std::vector<float> l, r;
+        bd.play (4800, { { 0, 0, 0.75 } }, l, r);
+        CHECK_MSG (peakOf (l) == 0.0, "GM key 0 plays the Bass Drum (peak %g)", peakOf (l));
+    }
     // MIDI notes as CLAP notes.
     {
         Instance a, b;

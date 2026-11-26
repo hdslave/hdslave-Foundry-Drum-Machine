@@ -78,8 +78,11 @@ struct Engine
         std::memset (gmVoice, -1, sizeof (gmVoice));
         for (int v = voiceCount - 1; v >= 0; --v)
             for (int8_t k : voiceSpecs[v].gm)
-                if (k >= 0)
-                    gmVoice[k] = (int8_t) v;
+            {
+                if (k < 0)
+                    break; // the list's end: the places after it are zeros, which are not key 0
+                gmVoice[k] = (int8_t) v;
+            }
         for (uint32_t i = 0; i < table().count; ++i)
             set (table().rows[i].id, table().rows[i].def);
     }
