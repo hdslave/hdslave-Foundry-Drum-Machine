@@ -102,7 +102,7 @@ struct Engine
     void reset()
     {
         for (auto& v : voices)
-            v.active = false, v.fading = false, v.clearState();
+            v.active = false, v.fading = false, v.clearState(), v.declick = v.lastOut = 0.0f;
         std::fill (queued, queued + voiceCount, 0);
         nextDue = INT64_MAX;
         reverb.clear();

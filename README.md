@@ -195,6 +195,10 @@ set their level from the hit, and the resonators took both strikes), and the ope
 with it. Hits on different samples (flams, sub-steps, Nudge) play as before. Humanize now moves a note's linked
 voices with it; before, each drew its own lateness and softening, so a stacked kick could land up to 8 ms apart.
 
+A voice hit again while it fades (choked, or past its Gate) starts from silence: its tail is gone, not back at full.
+Since 0.6.7 the tail's last sample eases out under the new hit over about 2 ms instead of stepping to nothing, which
+clicked when the voice has an Attack Time (the new hit rising from zero).
+
 ### Each type's own
 
 The TR-1000 names where it has the control; *new* where it does not.
@@ -389,7 +393,8 @@ The tests load the plug-in through the CLAP API and check:
   the 909 kick's sweep; the 808 snare's 175 Hz with its 331 Hz far under (Tone bringing it up) and the rim shot's
   455/1667 Hz; the 808 tom's falling pitch; the 808
   hats' energy above 6 kHz; the clap's four bursts 9 ms apart; the 909 metal's held words;
-- velocity, accent, choke groups and the host's choke; hits on one sample (the louder once on the 909 and 808 kicks,
+- velocity, accent, choke groups and the host's choke (a voice hit again inside its fade, choked or gated, with no
+  step in its output); hits on one sample (the louder once on the 909 and 808 kicks,
   the closed hat whole and the open one dropped, linked layers in one group both sounding); a voice switched to
   another model carrying nothing over;
 - the TR-1000's generator controls: Phase (the voice exactly inverted), Bend Mix (0 the dry voice), Mute Decay, an
@@ -420,6 +425,6 @@ Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on t
 empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
 
-Version 0.6.6. Since 0.6.5 it uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
+Version 0.6.7. Since 0.6.5 it uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
 A01–A16 drum map and can use Foundry’s second stereo output, SC Key, for the master compressor.
 Physical MPC testing is pending.

@@ -876,6 +876,47 @@ void testChoke()
     CHECK (same (std::vector<float> (open.begin(), open.end()), free));
     CHECK (peakOf (cut, 14400) < 1e-6);
     CHECK (same (std::vector<float> (open.begin(), open.begin() + 12000), std::vector<float> (cut.begin(), cut.begin() + 12000)));
+
+    // A voice hit again inside its own choke's fade starts from silence (its tail is gone, not back at full), and the
+    // tail's last sample eases out over half a millisecond instead of stepping to nothing. With an Attack Time the new
+    // hit rises from zero, so to 0.6.6 the output stepped by the tail's size there (0.06 to 0.51 on the kicks and toms
+    // at Choke Time 100 %, where the same hit alone moves at most 0.024 a sample). The kicks and toms, a host's choke
+    // and the voice's own Gate, 10 ms into the fade.
+    for (int v : { 0, 4, 5, 6, 15 })
+        for (bool gated : { false, true })
+        {
+            auto render = [&] (bool first, uint64_t again) {
+                Instance i;
+                auto base = solo (v);
+                base.push_back ({ "Choke Time", 1.0 });
+                base.push_back ({ std::string (tags[v]) + " Decay", 1.0 });
+                base.push_back ({ std::string (tags[v]) + " Attack Time", 0.3 });
+                if (gated) base.push_back ({ std::string (tags[v]) + " Gate", 0.33 }); // 36 ms
+                i.setup (base);
+                std::vector<float> l, r;
+                i.render (24000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+                    if (first && at == 0) e.note (0, CLAP_EVENT_NOTE_ON, (int16_t) padKey (v), 1.0);
+                    if (first && ! gated && 12000 >= at && 12000 < at + n) e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, (int16_t) padKey (v), 0.0);
+                    if (again >= at && again < at + n) e.note ((uint32_t) (again - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (v), 1.0);
+                });
+                return l;
+            };
+            auto largestStep = [] (const std::vector<float>& x, size_t from, size_t to) {
+                double m = 0.0;
+                for (size_t i = from; i < to; ++i) m = std::max (m, (double) std::fabs (x[i] - x[i - 1]));
+                return m;
+            };
+            const uint64_t at = gated ? 2208 : 12480; // the Gate's fade starts at 1728
+            const auto rehit = render (true, at), alone = render (false, at);
+            const double tail = peakOf (rehit, at - 100, at), own = largestStep (alone, at, at + 4800);
+            const double before = largestStep (rehit, at - 480, at), step = largestStep (rehit, at, at + 48);
+            CHECK (tail > 0.01);
+            if (step >= 2.0 * std::max (own, before))
+                std::printf ("  %s hit again in its %s fade: a step of %.4f (the tail %.4f; its own steps %.4f, the hit alone %.4f)\n", tags[v],
+                             gated ? "Gate's" : "choke's", step, tail, before, own);
+            CHECK (step < 2.0 * std::max (own, before));
+            CHECK (peakOf (rehit, at + 2400, at + 4800) > 0.5 * peakOf (alone, at + 2400, at + 4800)); // and it plays
+        }
 }
 
 // Hits on one sample (Melodee gives every note of a 128-frame block its first frame). One voice hit twice plays the
@@ -1926,6 +1967,7 @@ void writeDemos (const std::string& folder)
         writeWav ((folder + "/demo-" + key + ".wav").c_str(), l, r, 48000);
     }
 }
+
 } // namespace
 
 int main (int argc, char** argv)

@@ -116,6 +116,9 @@ struct Voice
     int64_t gateLeft = -1;
     float fade = 1.0f;
     bool fading = false;
+    // A hit inside the fade cut the tail: the tail's last output sample, easing out under the new hit (2 ms) instead
+    // of stepping to nothing. lastOut is the voice's last output sample.
+    float declick = 0.0f, declickCoef = 0.0f, lastOut = 0.0f;
     // The mix: gains at the tick's start and end (ramped across it): left, right, reverb, delay, and the side-chain
     // key (the voice before its Level and the ducking, so a muted voice still keys).
     float g0[5] {}, g1[5] {};
@@ -251,7 +254,10 @@ struct Voice
     {
         const bool wasActive = active && ! fading; // a fading voice is cleared below: its hit starts from silence
         if (fading)
-            clearState(); // a choked voice's tail is gone, not back at full
+        {
+            clearState(); // a choked voice's tail is gone, not back at full,
+            declick = lastOut, declickCoef = std::exp (-sh.invRate / 0.002f); // and its last sample eases out
+        }
         fading = false;
         fade = 1.0f;
         model = (uint8_t) p[V::model];
@@ -322,11 +328,20 @@ struct Voice
             case Type::maraca: alive = renderMaraca (out, n); break;
         }
         chain (out, n, sh);
+        if (declick != 0.0f)
+        {
+            float d = declick;
+            for (int i = 0; i < n; ++i)
+                d *= declickCoef, out[i] += d;
+            declick = std::fabs (d) < 1e-7f ? 0.0f : d;
+        }
+        lastOut = out[n - 1];
         if (tickEnd && (! alive || (fading && fade < 1e-4f)))
         {
             active = false;
             fading = false;
             clearState();
+            declick = lastOut = 0.0f;
         }
     }
 
