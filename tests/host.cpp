@@ -878,7 +878,7 @@ void testChoke()
     CHECK (same (std::vector<float> (open.begin(), open.begin() + 12000), std::vector<float> (cut.begin(), cut.begin() + 12000)));
 
     // A voice hit again inside its own choke's fade starts from silence (its tail is gone, not back at full), and the
-    // tail's last sample eases out over half a millisecond instead of stepping to nothing. With an Attack Time the new
+    // tail's last sample eases out over 2 ms instead of stepping to nothing. With an Attack Time the new
     // hit rises from zero, so to 0.6.6 the output stepped by the tail's size there (0.06 to 0.51 on the kicks and toms
     // at Choke Time 100 %, where the same hit alone moves at most 0.024 a sample). The kicks and toms, a host's choke
     // and the voice's own Gate, 10 ms into the fade.
@@ -917,6 +917,52 @@ void testChoke()
             CHECK (step < 2.0 * std::max (own, before));
             CHECK (peakOf (rehit, at + 2400, at + 4800) > 0.5 * peakOf (alone, at + 2400, at + 4800)); // and it plays
         }
+
+    // Hit again inside the fade and choked again: what is left of the old tail's easing out fades with the new choke,
+    // as the rest of the voice does, and is gone when the voice ends. To 0.6.7's first build it did not fade, and the
+    // voice's end cut it: at Choke Time 0 a step of 0.16 there, where a choke of the tail alone steps at most 0.09. The
+    // Bass Drum at full Decay, choked and hit again on one frame, then choked again 1 ms later by the host or CC 120,
+    // at Choke Time 0 or with its own Mute Decay at 1 ms.
+    for (int how : { 0, 1, 2 })
+    {
+        const bool cc = how == 1, mute = how == 2;
+        auto render = [&] (bool again) {
+            Instance i;
+            auto base = solo (0);
+            base.push_back ({ "Choke Time", mute ? 0.45 : 0.0 });
+            base.push_back ({ "BD Decay", 1.0 });
+            if (mute) base.push_back ({ "BD Mute Decay", 0.001 });
+            i.setup (base);
+            std::vector<float> l, r;
+            i.render (24000, 128, l, r, [] (uint64_t) { return Transport {}; }, [&] (uint64_t at, uint32_t n, Events& e) {
+                if (at == 0) e.note (0, CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 1.0);
+                if (12000 >= at && 12000 < at + n)
+                {
+                    e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_CHOKE, (int16_t) padKey (0), 0.0);
+                    if (again) e.note ((uint32_t) (12000 - at), CLAP_EVENT_NOTE_ON, (int16_t) padKey (0), 1.0);
+                }
+                if (again && 12048 >= at && 12048 < at + n)
+                {
+                    if (cc) e.midi ((uint32_t) (12048 - at), 0xB0, 120, 0);
+                    else e.note ((uint32_t) (12048 - at), CLAP_EVENT_NOTE_CHOKE, (int16_t) padKey (0), 0.0);
+                }
+            });
+            return l;
+        };
+        auto largestStep = [] (const std::vector<float>& x, size_t from, size_t to) {
+            double m = 0.0;
+            for (size_t i = from; i < to; ++i) m = std::max (m, (double) std::fabs (x[i] - x[i - 1]));
+            return m;
+        };
+        const auto twice = render (true), once = render (false);
+        const double own = largestStep (once, 12000, 24000), step = largestStep (twice, 12048, 24000);
+        CHECK (own > 0.01);
+        if (step > own || peakOf (twice, 12048 + 480) >= 1e-4)
+            std::printf ("  hit again in its fade, choked again by %s: a step of %.4f (a choke of the tail alone %.4f), %.6f 10 ms on\n",
+                         cc ? "CC 120" : mute ? "the host, Mute Decay 1 ms" : "the host", step, own, peakOf (twice, 12048 + 480));
+        CHECK (step <= own);
+        CHECK (peakOf (twice, 12048 + 480) < 1e-4);
+    }
 }
 
 // Hits on one sample (Melodee gives every note of a 128-frame block its first frame). One voice hit twice plays the

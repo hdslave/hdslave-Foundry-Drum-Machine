@@ -327,12 +327,23 @@ struct Voice
             case Type::clave: alive = renderClave (out, n); break;
             case Type::maraca: alive = renderMaraca (out, n); break;
         }
+        const bool wasFading = fading;
+        const int64_t gateAt = gateLeft; // the Gate's fade starts on this sample, when it is in this run
         chain (out, n, sh);
         if (declick != 0.0f)
         {
+            // It fades with the voice: a choke or the Gate after the hit takes it down sample for sample with the
+            // hit (shape()'s fade, from the hit's 1), and the voice's end finds nothing of it left to cut.
+            const float fadeCoef = ownMute ? muteCoef : sh.chokeCoef;
+            const int from = wasFading ? 0 : gateAt >= 0 && gateAt < n ? (int) gateAt : n;
             float d = declick;
             for (int i = 0; i < n; ++i)
-                d *= declickCoef, out[i] += d;
+            {
+                d *= declickCoef;
+                if (i >= from)
+                    d *= fadeCoef;
+                out[i] += d;
+            }
             declick = std::fabs (d) < 1e-7f ? 0.0f : d;
         }
         lastOut = out[n - 1];

@@ -197,7 +197,8 @@ voices with it; before, each drew its own lateness and softening, so a stacked k
 
 A voice hit again while it fades (choked, or past its Gate) starts from silence: its tail is gone, not back at full.
 Since 0.6.7 the tail's last sample eases out under the new hit over about 2 ms instead of stepping to nothing, which
-clicked when the voice has an Attack Time (the new hit rising from zero).
+clicked when the voice has an Attack Time (the new hit rising from zero). A choke or the Gate after the new hit fades
+that easing out with the rest of the voice.
 
 ### Each type's own
 
@@ -394,7 +395,8 @@ The tests load the plug-in through the CLAP API and check:
   455/1667 Hz; the 808 tom's falling pitch; the 808
   hats' energy above 6 kHz; the clap's four bursts 9 ms apart; the 909 metal's held words;
 - velocity, accent, choke groups and the host's choke (a voice hit again inside its fade, choked or gated, with no
-  step in its output); hits on one sample (the louder once on the 909 and 808 kicks,
+  step in its output, and choked again 1 ms on, by the host or CC 120 or with its own Mute Decay, with no step larger
+  than a choke of the tail alone); hits on one sample (the louder once on the 909 and 808 kicks,
   the closed hat whole and the open one dropped, linked layers in one group both sounding); a voice switched to
   another model carrying nothing over;
 - the TR-1000's generator controls: Phase (the voice exactly inverted), Bend Mix (0 the dry voice), Mute Decay, an
