@@ -56,9 +56,20 @@ them to General MIDI keys instead.
 B2): a pattern recorded on 0.5 or earlier plays other voices now. A saved project's voice settings are kept, as each
 voice keeps its parameters.
 
-**Keys Voice** (Off, or any voice) makes every other note play that voice transposed: with Pads, note 60 is the voice
-at its own pitch (pad bank B, notes 52-67, is -8 to +7 semitones; bank C goes on up); with GM, notes from 84 up, 96
-being its pitch. Set it to BD for an 808 bass line (the **808 Bass Keys** preset).
+### Pad banks
+
+The embedded drum map tells hdslaveOS to play Foundry's track as drums: pads A01-A16 send notes 36-51 whatever the
+track's octave, key or scale, and the pad names show on the Keys page. On Stage, − / + then move the pad **bank**: bank B
+sends 52-67, C 68-83, D 84-99. Since 0.7.0, with **Key Map: Pads** and no Keys Voice, every bank plays the same sixteen
+voices at the same sound: a note plays pad (note − 36) mod 16, so 52, 68 and 84 all play the Bass Drum, as do the
+notes below 36 (20, 4). Foundry's voices have no pitch per key, so a bank does not transpose them (Tune does that).
+Before 0.7.0 every note outside 36-51 was silent. Not yet run on the MPC.
+
+**Keys Voice** (Off, or any voice) keeps its own meaning and wins over the banks: every note outside 36-51 plays that
+voice transposed, note 60 being the voice at its own pitch (bank B, notes 52-67, is -8 to +7 semitones; bank C goes on
+up). Set it to BD for an 808 bass line (the **808 Bass Keys** preset). **Key Map: GM** is for external MIDI and keeps
+the General MIDI keys in the table above (52 is the Crash, 53 the Ride, and keys no list names stay silent); its Keys
+Voice plays from 84 up, 96 being its pitch. On the MPC, GM makes pads A01-A16 play GM keys 36-51, not the pads' names.
 
 ## X0X Drum Works screen
 
@@ -155,8 +166,8 @@ then the effects.
 | Accent Vel | 1 – 127 | a note at least this hard is accented |
 | Choke Time | 1 – 200 ms | how fast a choked or gated voice fades (the TR-1000's MUTE DECAY) |
 | Clip | Off / Soft / Limit | the TR-1000's master clip |
-| Key Map | Pads / GM | |
-| Keys Voice | Off / a voice | see above |
+| Key Map | Pads / GM | see [Pad banks](#pad-banks) |
+| Keys Voice | Off / a voice | see [Pad banks](#pad-banks) |
 | Step | 1/8 … 1/32 with triplets | the step Sub-Step divides |
 | Vel Curve | Soft / Linear / Hard | |
 | Humanize | 0 – 100 % | each note up to 8 ms late and up to 25 % softer, its linked voices with it, the same for the same place in the song |
@@ -414,8 +425,8 @@ The tests load the plug-in through the CLAP API and check:
   placed on the nearest frame; the Tape delay at its longest; the 909 kick's coupling the same at 192 kHz;
 - finite, bounded output at 36 random and extreme settings at 44.1, 48 and 96 kHz.
 
-`tests/fingerprint.cpp` then renders 93 fixed scenarios (each preset, each voice in each model, the shared chain,
-the performance controls, the GM map, the LFOs, the effects and side chain, knobs moving, other block sizes and
+`tests/fingerprint.cpp` then renders 94 fixed scenarios (each preset, each voice in each model, the shared chain,
+the performance controls, the GM map, the pad banks, the LFOs, the effects and side chain, knobs moving, other block sizes and
 rates, stop and a jump, random patches) and hashes every output sample's bits against `tests/fingerprint.txt`: work
 meant to keep the sound, such as a speed-up, must leave every hash as it is. A change meant to change the sound
 updates them with `make fingerprint-update` (inside the build image). The hashes hold for Melodee's build image and
@@ -427,6 +438,6 @@ Copy `build/Foundry.clap` to `Melodee/Plugins/hdslave/hdslave Foundry.clap` on t
 empty track: Stage, Plugin, hdslave, hdslave Foundry. Its pads become the kit. It needs only libc and libm (glibc 2.35 or
 older).
 
-Version 0.6.7. Since 0.6.5 it uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
+Version 0.7.0: every pad bank (52-99, and the notes below 36) plays the same sixteen voices. Since 0.6.5 it uses the official screen extension on MPC and in the desktop wrapper. hdslaveOS reads the embedded
 A01–A16 drum map and can use Foundry’s second stereo output, SC Key, for the master compressor.
 Physical MPC testing is pending.

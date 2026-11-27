@@ -382,6 +382,10 @@ void testDrumMap (const char* path)
     for (int k = 36; k <= 51; ++k)
         notes += map.find ("\"note\":" + std::to_string (k) + "}") != std::string::npos;
     CHECK (notes == 16);
+    int entries = 0;
+    for (size_t k = map.find ("\"note\":"); k != std::string::npos; k = map.find ("\"note\":", k + 1))
+        ++entries;
+    CHECK_MSG (entries == 16, "%d entries", entries);
     // Each pad named as the note-name extension names it: A01-A16 from the bottom left, along each row and up.
     static const char* const padNames[16] = { "Bass Drum", "Snare Drum", "Hand Clap", "Closed Hat", "Bass Drum 2", "Rim Shot",
                                               "Crash", "Open Hat", "Low Tom", "Mid Tom", "High Tom", "Cowbell", "Ride",
@@ -1523,6 +1527,61 @@ void testKeysAndMaps()
     }
 }
 
+// The pad banks (Key Map Pads, no Keys voice): hdslaveOS's Drums layout sends pads A01-A16 as 36-51, and - / + move
+// the bank: B 52-67, C 68-83, D 84-99. Every bank, and the keys below 36, play the same sixteen voices at the same
+// sound (to 0.6.7 they were silent). A Keys voice keeps its old meaning: the keys outside 36-51 play it from 60.
+// GM keeps its keys (52 the crash, 53 the ride).
+void testBanks()
+{
+    auto render = [] (int key, std::vector<std::pair<std::string, double>> values) {
+        Instance i;
+        i.setup (values);
+        std::vector<float> l, r;
+        i.play (12000, { { 0, key, 0.75 } }, l, r);
+        l.insert (l.end(), r.begin(), r.end());
+        return l;
+    };
+    for (int slot = 0; slot < 16; ++slot)
+    {
+        const auto a = render (36 + slot, {});
+        CHECK_MSG (peakOf (a) > 0.01, "pad %d silent", slot);
+        for (int bank : { -2, -1, 1, 2, 3 })
+        {
+            const int key = 36 + slot + 16 * bank;
+            if (key < 0 || key > 127)
+                continue;
+            CHECK_MSG (same (render (key, {}), a), "key %d is not pad %d", key, slot);
+        }
+        // And alone in the mix it is that pad's voice.
+        const int v = foundry::padVoice[slot];
+        CHECK_MSG (peakOf (render (52 + slot, solo (v))) > 0.01, "bank B pad %d is not voice %d", slot, v);
+    }
+    // Keys 0 and 127 too: (key - 36) mod 16.
+    CHECK (same (render (0, {}), render (36 + 12, {})) && same (render (127, {}), render (36 + 11, {})));
+    // A host choke on a bank key chokes its pad's voice.
+    {
+        Instance a, b;
+        a.setup ({}), b.setup ({});
+        std::vector<float> la, ra, lb, rb;
+        a.render (24000, 128, la, ra, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) {
+            if (at == 0) e.note (0, CLAP_EVENT_NOTE_ON, 36, 0.8);
+            if (at == 6144) e.note (0, CLAP_EVENT_NOTE_CHOKE, 52, 0.0); });
+        b.render (24000, 128, lb, rb, [] (uint64_t) { return Transport {}; }, [] (uint64_t at, uint32_t, Events& e) {
+            if (at == 0) e.note (0, CLAP_EVENT_NOTE_ON, 36, 0.8);
+            if (at == 6144) e.note (0, CLAP_EVENT_NOTE_CHOKE, 36, 0.0); });
+        CHECK (same (la, lb));
+    }
+    // A Keys voice: 52 plays it 8 semitones under 60, as before, not pad A01.
+    CHECK (! same (render (52, { { "Keys Voice", 1.0 } }), render (36, { { "Keys Voice", 1.0 } })));
+    // GM: 52 the crash, 54 nothing (no voice and no Keys voice).
+    CHECK (peakOf (render (52, { { "Key Map", 1.0 } })) > 0.01 && peakOf (render (54, { { "Key Map", 1.0 } })) == 0.0);
+    {
+        auto values = solo (9);
+        values.push_back ({ "Key Map", 1.0 });
+        CHECK (peakOf (render (52, values)) > 0.01);
+    }
+}
+
 // The side chain: BD as source ducks the open hat by its Duck.
 void testSideChain()
 {
@@ -2053,6 +2112,7 @@ int main (int argc, char** argv)
     testEnds();
     testPerformance();
     testKeysAndMaps();
+    testBanks();
     testSideChain();
     testEffects();
     testDelayWake();

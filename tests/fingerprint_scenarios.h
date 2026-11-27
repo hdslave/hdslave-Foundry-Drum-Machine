@@ -91,6 +91,14 @@ inline std::vector<Scenario> scenarios()
             s.events.push_back ({ (uint64_t) k * 5000, Event::noteOn, "", (double) (35 + (k * 7) % 60), 0.3 + 0.014 * k });
         list.push_back (s);
     }
+    // The pad banks: keys outside 36-51 play their pad's voice (slot (key - 36) mod 16), as the MPC's banks B-D send.
+    {
+        Scenario s;
+        s.name = "pad-banks";
+        for (int k = 0; k < 48; ++k)
+            s.events.push_back ({ (uint64_t) k * 5000, Event::noteOn, "", (double) (4 + (k * 13) % 112), 0.3 + 0.014 * k });
+        list.push_back (s);
+    }
     // LFOs on every target and wave.
     {
         Scenario s;

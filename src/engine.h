@@ -230,14 +230,20 @@ struct Engine
 
     // --- Notes --------------------------------------------------------------------------------------------------
     // The voice a key plays and how far it is transposed (the Keys voice), -1 none.
+    // Key Map Pads: keys 36-51 are pads A01-A16. With no Keys voice every other key plays a pad too, as its bank's
+    // pad: the pad's slot is (key - 36) mod 16, so banks B-D (52-99, the MPC's - / + in the Drums layout) and the
+    // keys below play the same sixteen voices, at the same sound. With a Keys voice the keys outside 36-51 play it
+    // chromatically from 60, as before. Key Map GM keeps its own keys.
     int voiceOf (int key, float& transpose) const
     {
         transpose = 0.0f;
         const bool gm = m[M::keyMap] >= 0.5f;
+        const int keys = (int) m[M::keysVoice];
         int v = gm ? gmVoice[key & 127] : (key >= 36 && key < 36 + voiceCount ? (int) padVoice[key - 36] : -1);
         if (v >= 0)
             return v;
-        const int keys = (int) m[M::keysVoice];
+        if (! gm && keys <= 0)
+            return (int) padVoice[padSlot (key)];
         if (keys <= 0 || (gm && key < 84))
             return -1;
         transpose = (float) (key - (gm ? 96 : 60));

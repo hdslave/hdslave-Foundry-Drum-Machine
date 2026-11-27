@@ -61,6 +61,7 @@ chain-2 5d2aadaa6316c380
 chain-3 77442d289d3c61e2
 performance cca44f2321a26c3d
 gm-map 5b0b520c56dac91b
+pad-banks c32c1052394a80c2
 lfos 56107d4652769398
 effects-0 d75a8a892ef85113
 effects-1 d46e88ebafae96f5

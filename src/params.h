@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #ifndef FOUNDRY_VERSION
-#define FOUNDRY_VERSION "0.6.7"
+#define FOUNDRY_VERSION "0.7.0"
 #endif
 
 namespace foundry
@@ -139,6 +139,13 @@ inline constexpr VoiceSpec voiceSpecs[voiceCount] = {
 // LT, MT, HT, CB; RD, CL, MA, CG. Pad k is MIDI note 36 + k (Key Map: Pads). The voices keep their ids (their order
 // above); 0.6.0 moved where they sit.
 inline constexpr int8_t padVoice[voiceCount] = { 0, 2, 3, 7, 15, 1, 9, 8, 4, 5, 6, 11, 10, 12, 13, 14 };
+// The pad slot a key plays in the bank layout (Key Map Pads, no Keys voice): (key - 36) mod 16, every bank the
+// same sixteen pads.
+constexpr int padSlot (int key)
+{
+    const int from = key - 36;
+    return ((from % voiceCount) + voiceCount) % voiceCount;
+}
 constexpr int padOf (int voice)
 {
     for (int k = 0; k < voiceCount; ++k)
