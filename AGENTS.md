@@ -46,3 +46,7 @@ Read `../AGENTS.md`, then `../Workflow/plugins.md` and `../Workflow/host-facts.m
 - **Drum map.** `drumMapJson` in `src/foundry.cpp` tells hdslaveOS to play the pads as drums (notes 36-51).
 - **Side-chain key.** A second stereo output port, "SC Key", carries the SC Source voice before its Level. hdslaveOS keys its master compressor from it.
 - **Reference recordings** used for fitting stay in ignored `build/ref/`: never commit them.
+
+## Release packaging
+
+Every release ZIP includes the full repository `LICENSE.txt` beside the third-party notices, outside signed plug-in bundles. Preserve both when packaging the plug-in for another project.

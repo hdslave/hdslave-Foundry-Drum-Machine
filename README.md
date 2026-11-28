@@ -12,6 +12,10 @@ Every pad is a dedicated circuit-modelled drum voice (kick, snare, tom, rim, cla
 
 Foundry has no internal sequencer — the host plays it directly from the MPC's pads as a kit (carrying the pad map Melodee expects), so Melodee's step sequencer, swing, note repeat, and MOTION drive every voice. Under **hdslaveOS**, it draws the animated **X0X Drum Works** screen with live pad feedback and a 2-second hit timeline.
 
+## hdslave plug-in license
+
+You may use these plug-ins to make, perform, record and sell music, including paid client work, without royalties or credit to hdslave. You may share complete, unchanged official releases for free with their notices intact. Selling the software, including it in a paid product or subscription, or distributing a modified version requires prior written permission from hdslave. Third-party components keep their own licenses. [Full plug-in license](LICENSE.txt).
+
 ## The kit
 
 Pads A01-A16 (MIDI notes 36-51), each a voice, from the bottom left along each row and up; **Key Map: GM** moves
