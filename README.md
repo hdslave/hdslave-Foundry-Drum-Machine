@@ -8,8 +8,8 @@
     <th width="66%">macOS and Windows · CLAP</th>
   </tr>
   <tr>
-    <td align="center"><a href="docs/foundry-screen.gif"><img src="docs/foundry-screen.gif" alt="Foundry X0X Drum Works screen running in hdslaveOS"></a></td>
-    <td align="center"><a href="mac-clap/assets/desktop-preview.gif"><img src="mac-clap/assets/desktop-preview.gif" alt="Foundry drum pads and voice controls during a drum pattern"></a></td>
+    <td align="center"><a href="docs/foundry-screen.webp"><img src="docs/mpc-loop.webp" alt="Foundry X0X Drum Works screen running in hdslaveOS"></a></td>
+    <td align="center"><a href="mac-clap/assets/desktop-preview.webp"><img src="mac-clap/assets/desktop-loop.webp" alt="Foundry drum pads and voice controls during a drum pattern"></a></td>
   </tr>
 </table>
 
